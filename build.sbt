@@ -41,6 +41,7 @@ lazy val commonSettings = Def.settings(
     "dev.zio"                       %% "zio-concurrent"                % "2.0.2",
     "dev.zio"                       %% "zio-streams"                   % "2.0.2",
     "dev.zio"                       %% "zio-logging"                   % "2.1.0",
+    "dev.zio"                       %% "zio-json"                      % "0.3.0",
     "com.softwaremill.sttp.client3" %% "zio"                           % "3.7.6",
     "com.softwaremill.sttp.client3" %% "async-http-client-backend-zio" % "3.7.6",
     "dev.zio"                       %% "zio-test"                      % "2.0.2" % Test,

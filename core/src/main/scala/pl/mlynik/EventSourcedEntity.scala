@@ -43,7 +43,7 @@ object EventSourcedEntity {
     eventHandler: (STATE, EVENT) => UIO[STATE]
   ): ZIO[Journal[EVENT] with SnapshotStorage[STATE], Storage.LoadError, EntityRef[COMMAND, EVENT, STATE]] = {
 
-    case class State(offset: Int, entity: STATE) {
+    final case class State(offset: Int, entity: STATE) {
       def updateState(entity: STATE): State = this.copy(offset = offset + 1, entity = entity)
 
       def updateState(offset: Int, entity: STATE): State = this.copy(offset = offset, entity = entity)

@@ -1,10 +1,11 @@
 package pl.mlynik
 
-import zio._
-import zio.test._
-import zio.test.Assertion._
-
-import pl.mlynik.journal._
+import zio.*
+import zio.test.*
+import zio.test.{ test, * }
+import zio.test.Assertion.*
+import pl.mlynik.journal.*
+import pl.mlynik.journal.Storage.Offseted
 
 object MyPersistentBehavior {
 
@@ -64,15 +65,49 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
           response <- entity.ask[Nothing, List[Long]](Command.Get)
         } yield assert(response)(equalTo(List(13)))
       },
-      test("Accepts asks which returns error") {
+      test("Accepts asks which returns errors") {
         for {
           entity   <- MyPersistentBehavior("1")
           _        <- entity.send(Command.NextNumber(13))
           response <- entity.ask[FailResponse.type, List[Long]](Command.Fail).either
         } yield assert(response)(isLeft(equalTo(FailResponse)))
+      },
+      test("Accepts and handles commands in correct order") {
+        def run(id: String) = for {
+          entity   <- MyPersistentBehavior(id)
+          ns       <- ZIO.foreach(1 to 1000)(_ => Random.nextInt)
+          _        <- ZIO.foreach(ns)(n => entity.send(Command.NextNumber(n)))
+          response <- entity.ask[Nothing, List[Long]](Command.Get)
+        } yield (ns, response)
+        for {
+          f1 <- run("1").fork
+          f2 <- run("2").fork
+          fs <- f1.zip(f2).join
+        } yield assert(fs._1)(equalTo(fs._1)) &&
+          assert(fs._2)(equalTo(fs._2)) &&
+          assert(fs._3._1)(equalTo(fs._3._1)) &&
+          assert(fs._3._2)(equalTo(fs._3._2)) &&
+          assert(fs._3._1)(not(equalTo(fs._1)))
+      },
+      test("Stores snapshot and replays the journal from the correct offseted event") {
+
+        for {
+          entity   <- MyPersistentBehavior("1")
+          _ <- entity.send(Command.NextNumber(13)) // 0
+          _ <- entity.send(Command.NextNumber(13)) // 1
+          _ <- entity.send(Command.NextNumber(13)) // 2
+          _ <- entity.send(Command.Clear)          // 3
+          snapshot <- ZIO
+                        .serviceWith[SnapshotStorage[State]](_.loadLast("1"))
+                        .flatten
+                        .flatMap(f => ZIO.fromOption(f).orElseFail(new Error))
+
+          _ <- entity.send(Command.NextNumber(13)) // 4
+          lastEvent <- ZIO.serviceWith[Journal[Event]](_.load("1", snapshot.offset).runCollect.map(_.head)).flatten
+        } yield assert(snapshot)(equalTo(Offseted(4, State()))) && assert(lastEvent.offset)(equalTo(4))
       }
     ).provide(
       InMemoryJournal.live[MyPersistentBehavior.Event],
-      NoopSnapshotStorage.live[MyPersistentBehavior.State]
+      InSnapshotStorage.live[MyPersistentBehavior.State]
     )
 }
