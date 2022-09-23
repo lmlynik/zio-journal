@@ -1,24 +1,35 @@
 package pl.mlynik.journal
 
 import pl.mlynik.journal.Storage.{ Offseted, PersistError }
+import pl.mlynik.journal.serde.Serde
 import zio.*
 import zio.concurrent.ConcurrentMap
 import zio.stream.ZStream
+import zio.stream.ZPipeline
 
-final class InMemoryJournal[EVENT](storage: ConcurrentMap[String, List[Offseted[EVENT]]]) extends Journal[EVENT] {
+final class InMemoryJournal[EVENT](storage: ConcurrentMap[String, List[Offseted[String]]], serde: Serde[EVENT, String])
+    extends Journal[EVENT] {
 
   case class LoadIOException(io: Throwable) extends Storage.LoadError
   def persist(id: String, event: EVENT): IO[Storage.PersistError, Unit] =
-    storage
-      .compute(
-        id,
-        {
-          case (_, None) | (_, Some(Nil)) => Some(List(Offseted(0, event)))
-          case (_, Some(current))         =>
-            Some(current :+ Offseted(current.last.offset + 1, event))
-        }
-      )
-      .unit
+    serde.serialize(event).flatMap { payload =>
+      storage
+        .compute(
+          id,
+          {
+            case (_, None) | (_, Some(Nil)) => Some(List(Offseted(0, payload)))
+            case (_, Some(current))         =>
+              Some(current :+ Offseted(current.last.offset + 1, payload))
+          }
+        )
+        .unit
+    }
+
+  private val deserialize = ZPipeline.mapZIO[Any, Nothing, Offseted[String], Offseted[EVENT]] { r =>
+    serde.deserialize(r.value).map { event =>
+      r.copy(value = event)
+    }
+  }
 
   def load(id: String, loadFrom: Int): ZStream[Any, Storage.LoadError, Offseted[EVENT]] =
     ZStream.unwrap {
@@ -26,14 +37,15 @@ final class InMemoryJournal[EVENT](storage: ConcurrentMap[String, List[Offseted[
         .get(id)
         .map(_.getOrElse(Nil).iterator)
         .map(it => ZStream.fromIterator(it).mapError(ioe => LoadIOException(ioe)))
-    }.filter(_.offset >= loadFrom)
+    }.filter(_.offset >= loadFrom).via(deserialize)
 }
 
 object InMemoryJournal {
-  def live[EVENT: Tag]: ZLayer[Any, Nothing, Journal[EVENT]] = ZLayer.fromZIO {
+  def live[EVENT: Tag]: ZLayer[Serde[EVENT, String], Nothing, Journal[EVENT]] = ZLayer.fromZIO {
     for {
-      mp <- ConcurrentMap.make[String, List[Offseted[EVENT]]]()
-    } yield new InMemoryJournal(mp)
+      serde <- ZIO.service[Serde[EVENT, String]]
+      mp    <- ConcurrentMap.make[String, List[Offseted[String]]]()
+    } yield new InMemoryJournal(mp, serde)
   }
 }
 

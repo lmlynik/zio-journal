@@ -6,6 +6,8 @@ import zio.test.{ test, * }
 import zio.test.Assertion.*
 import pl.mlynik.journal.*
 import pl.mlynik.journal.Storage.Offseted
+import pl.mlynik.journal.serde.ZIOJSONSerde
+import zio.json._
 
 object MyPersistentBehavior {
 
@@ -49,7 +51,9 @@ object MyPersistentBehavior {
 }
 object EventSourcedEntitySpec extends ZIOSpecDefault {
   import MyPersistentBehavior.*
-  def spec =
+
+  given JsonCodec[MyPersistentBehavior.Event] = DeriveJsonCodec.gen[MyPersistentBehavior.Event]
+  def spec                                    =
     suite("EventSourcedEntitySpec")(
       test("Accepts commands which update states") {
         for {
@@ -108,6 +112,7 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
       }
     ).provide(
       InMemoryJournal.live[MyPersistentBehavior.Event],
-      InSnapshotStorage.live[MyPersistentBehavior.State]
+      InSnapshotStorage.live[MyPersistentBehavior.State],
+      ZIOJSONSerde.live[MyPersistentBehavior.Event]
     )
 }

@@ -2,6 +2,7 @@ package pl.mlynik
 
 import pl.mlynik.journal.{ Journal, SnapshotStorage, Storage }
 import pl.mlynik.journal.Storage.Offseted
+import pl.mlynik.journal.serde.Serde
 import zio.*
 
 object EventSourcedEntity {
