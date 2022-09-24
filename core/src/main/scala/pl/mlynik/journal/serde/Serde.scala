@@ -3,6 +3,8 @@ package pl.mlynik.journal.serde
 import zio._
 
 trait Serde[DOMAIN, PAYLOAD] {
+
+  def id: String
   def serialize(domain: DOMAIN): UIO[PAYLOAD]
 
   def deserialize(payload: PAYLOAD): UIO[DOMAIN]
@@ -14,6 +16,7 @@ object ZIOJSONSerde {
 
   private class Impl[DOMAIN: Tag](using JsonCodec[DOMAIN]) extends Serde[DOMAIN, String] {
 
+    override def id: String                             = "zio-json"
     override def serialize(domain: DOMAIN): UIO[String] = ZIO.attempt(domain.toJson).orDie
 
     override def deserialize(payload: String): UIO[DOMAIN] =
@@ -26,8 +29,12 @@ object ZIOJSONSerde {
 }
 
 object NoopSerde {
+
   def live[DOMAIN: Tag]: ULayer[Serde[DOMAIN, DOMAIN]] = ZLayer.succeed {
     new Serde[DOMAIN, DOMAIN]:
+
+      override def id: String = "noop"
+
       override def serialize(domain: DOMAIN): UIO[DOMAIN] = ZIO.succeed(domain)
 
       override def deserialize(payload: DOMAIN): UIO[DOMAIN] = ZIO.succeed(payload)

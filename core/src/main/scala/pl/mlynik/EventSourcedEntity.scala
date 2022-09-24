@@ -1,19 +1,11 @@
 package pl.mlynik
 
-import pl.mlynik.journal.{ Journal, SnapshotStorage, Storage }
+import pl.mlynik.journal.{ EntityRef, Journal, SnapshotStorage, Storage }
 import pl.mlynik.journal.Storage.Offseted
 import pl.mlynik.journal.serde.Serde
 import zio.*
 
 object EventSourcedEntity {
-
-  trait EntityRef[COMMAND, EVENT, STATE] {
-    def state: UIO[STATE]
-
-    def send(command: COMMAND): ZIO[SnapshotStorage[STATE] & Journal[EVENT], Storage.PersistError, Unit]
-
-    def ask[E, A](command: COMMAND): ZIO[SnapshotStorage[STATE] & Journal[EVENT], Storage.PersistError | E, A]
-  }
 
   enum Effect[+EVENT] {
     case Persist(event: EVENT)
@@ -37,12 +29,16 @@ object EventSourcedEntity {
       ZIO.succeed(Reply(result))
   }
 
-  def apply[COMMAND, EVENT: Tag, STATE: Tag](
+  def apply[COMMAND: Tag, EVENT: Tag, STATE: Tag](
     persistenceId: String,
     emptyState: STATE,
     commandHandler: (STATE, COMMAND) => URIO[Journal[EVENT], Effect[EVENT]],
     eventHandler: (STATE, EVENT) => UIO[STATE]
-  ): ZIO[Journal[EVENT] with SnapshotStorage[STATE], Storage.LoadError, EntityRef[COMMAND, EVENT, STATE]] = {
+  ): ZIO[Journal[EVENT] & SnapshotStorage[STATE] & EntityManager[COMMAND, EVENT, STATE], Storage.LoadError, EntityRef[
+    COMMAND,
+    EVENT,
+    STATE
+  ]] = {
 
     final case class State(offset: Int, entity: STATE) {
       def updateState(entity: STATE): State = this.copy(offset = offset + 1, entity = entity)
@@ -96,28 +92,34 @@ object EventSourcedEntity {
         commandHandler(st.entity, cmd).flatMap(handleEffect(st, resultPromise))
       } <* resultPromise.isDone.flatMap(done => ZIO.unless(done)(resultPromise.succeed(().asInstanceOf[A])))
 
-    for {
-      currentState <- Ref.Synchronized.make(State(0, emptyState))
-      _            <- journalPlayback(currentState)
-      _            <- ZIO.logInfo(s"Loaded $persistenceId")
+    def entity: ZIO[Journal[EVENT] with SnapshotStorage[STATE], Storage.LoadError, EntityRef[COMMAND, EVENT, STATE]] =
+      for {
+        currentState <- Ref.Synchronized.make(State(0, emptyState))
+        _            <- journalPlayback(currentState)
+        _            <- ZIO.logInfo(s"Loaded $persistenceId")
 
-    } yield new EntityRef[COMMAND, EVENT, STATE] {
-      override def state: UIO[STATE] = currentState.get.map(_._2)
+      } yield new EntityRef[COMMAND, EVENT, STATE] {
+        override def state: UIO[STATE] = currentState.get.map(_._2)
 
-      override def send(
-        command: COMMAND
-      ): ZIO[SnapshotStorage[STATE] & Journal[EVENT], Storage.PersistError, Unit] =
-        for {
-          promise <- Promise.make[Nothing, Unit]
-          _       <- handleCommand(command, currentState, promise)
-          result  <- promise.await
-        } yield result
+        override def send(
+          command: COMMAND
+        ): ZIO[SnapshotStorage[STATE] & Journal[EVENT], Storage.PersistError, Unit] =
+          for {
+            promise <- Promise.make[Nothing, Unit]
+            _       <- handleCommand(command, currentState, promise)
+            result  <- promise.await
+          } yield result
 
-      def ask[E, A](command: COMMAND): ZIO[SnapshotStorage[STATE] & Journal[EVENT], Storage.PersistError | E, A] = for {
-        promise <- Promise.make[E, A]
-        _       <- handleCommand(command, currentState, promise)
-        result  <- promise.await
-      } yield result
+        def ask[E, A](command: COMMAND): ZIO[SnapshotStorage[STATE] & Journal[EVENT], Storage.PersistError | E, A] =
+          for {
+            promise <- Promise.make[E, A]
+            _       <- handleCommand(command, currentState, promise)
+            result  <- promise.await
+          } yield result
+      }
+
+    ZIO.serviceWithZIO[EntityManager[COMMAND, EVENT, STATE]] { mgr =>
+      mgr.getOrCreate(persistenceId)(entity)
     }
   }
 }
