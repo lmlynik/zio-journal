@@ -8,13 +8,13 @@ object Storage {
   trait LoadError
   trait PersistError
 
-  final case class Offseted[T](offset: Int, value: T)
+  final case class Offseted[T](offset: Long, value: T)
 }
 
-trait Journal[EVENT] {
-  def persist(id: String, event: EVENT): IO[PersistError, Unit]
+trait Journal[R, EVENT] {
+  def persist(id: String, offset: Long, event: EVENT): ZIO[R, PersistError, Unit]
 
-  def load(id: String, loadFrom: Int): ZStream[Any, LoadError, Offseted[EVENT]]
+  def load(id: String, loadFrom: Long): ZStream[R, LoadError, Offseted[EVENT]]
 }
 
 trait SnapshotStorage[STATE] {

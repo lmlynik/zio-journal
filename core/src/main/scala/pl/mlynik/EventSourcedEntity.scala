@@ -29,21 +29,17 @@ object EventSourcedEntity {
       ZIO.succeed(Reply(result))
   }
 
-  def apply[COMMAND: Tag, EVENT: Tag, STATE: Tag](
+  def apply[R: Tag, COMMAND: Tag, EVENT: Tag, STATE: Tag](
     persistenceId: String,
     emptyState: STATE,
-    commandHandler: (STATE, COMMAND) => URIO[Journal[EVENT], Effect[EVENT]],
+    commandHandler: (STATE, COMMAND) => URIO[R & Journal[R, EVENT], Effect[EVENT]],
     eventHandler: (STATE, EVENT) => UIO[STATE]
-  ): ZIO[Journal[EVENT] & SnapshotStorage[STATE] & EntityManager[COMMAND, EVENT, STATE], Storage.LoadError, EntityRef[
-    COMMAND,
-    EVENT,
-    STATE
-  ]] = {
+  ) = {
 
-    final case class State(offset: Int, entity: STATE) {
+    final case class State(offset: Long, entity: STATE) {
       def updateState(entity: STATE): State = this.copy(offset = offset + 1, entity = entity)
 
-      def updateState(offset: Int, entity: STATE): State = this.copy(offset = offset, entity = entity)
+      def updateState(offset: Long, entity: STATE): State = this.copy(offset = offset, entity = entity)
     }
 
     def journalPlayback(
@@ -53,7 +49,7 @@ object EventSourcedEntity {
         for {
           snapshot    <- ZIO.serviceWith[SnapshotStorage[STATE]](_.loadLast(persistenceId)).flatten
           eventStream <-
-            ZIO.serviceWith[Journal[EVENT]](_.load(persistenceId, snapshot.map(_.offset).getOrElse(st.offset)))
+            ZIO.serviceWith[Journal[R, EVENT]](_.load(persistenceId, snapshot.map(_.offset).getOrElse(st.offset)))
           state       <- eventStream.runFoldZIO(st) { case (state, Offseted(offset, event)) =>
                            eventHandler(state.entity, event).map(stateD => st.updateState(offset, stateD))
                          }
@@ -63,13 +59,13 @@ object EventSourcedEntity {
     def handleEffect[E, A](
       state: State,
       resultPromise: Promise[E, A]
-    )(effect: Effect[EVENT]): ZIO[SnapshotStorage[STATE] with Journal[EVENT], Storage.PersistError, State] =
+    )(effect: Effect[EVENT]): ZIO[R & SnapshotStorage[STATE] & Journal[R, EVENT], Storage.PersistError, State] =
       for {
-        journal         <- ZIO.service[Journal[EVENT]]
+        journal         <- ZIO.service[Journal[R, EVENT]]
         snapshotStorage <- ZIO.service[SnapshotStorage[STATE]]
         newState        <- effect match
                              case Effect.Persist(event)   =>
-                               (journal.persist(persistenceId, event) *> eventHandler(state.entity, event))
+                               (journal.persist(persistenceId, state.offset, event) *> eventHandler(state.entity, event))
                                  .map(state.updateState)
                              case Effect.Snapshot         =>
                                snapshotStorage.store(persistenceId, Offseted(state.offset, state.entity)).as(state)
@@ -87,30 +83,33 @@ object EventSourcedEntity {
       cmd: COMMAND,
       currentState: Ref.Synchronized[State],
       resultPromise: Promise[E, A]
-    ): ZIO[SnapshotStorage[STATE] & Journal[EVENT], Storage.PersistError, State] =
+    ): ZIO[R & SnapshotStorage[STATE] & Journal[R, EVENT], Storage.PersistError, State] =
       currentState.updateAndGetZIO { st =>
         commandHandler(st.entity, cmd).flatMap(handleEffect(st, resultPromise))
       } <* resultPromise.isDone.flatMap(done => ZIO.unless(done)(resultPromise.succeed(().asInstanceOf[A])))
 
-    def entity: ZIO[Journal[EVENT] with SnapshotStorage[STATE], Storage.LoadError, EntityRef[COMMAND, EVENT, STATE]] =
+    def entity
+      : ZIO[R & Journal[R, EVENT] & SnapshotStorage[STATE], Storage.LoadError, EntityRef[R, COMMAND, EVENT, STATE]] =
       for {
         currentState <- Ref.Synchronized.make(State(0, emptyState))
         _            <- journalPlayback(currentState)
         _            <- ZIO.logInfo(s"Loaded $persistenceId")
 
-      } yield new EntityRef[COMMAND, EVENT, STATE] {
+      } yield new EntityRef[R, COMMAND, EVENT, STATE] {
         override def state: UIO[STATE] = currentState.get.map(_._2)
 
         override def send(
           command: COMMAND
-        ): ZIO[SnapshotStorage[STATE] & Journal[EVENT], Storage.PersistError, Unit] =
+        ): ZIO[R & SnapshotStorage[STATE] & Journal[R, EVENT], Storage.PersistError, Unit] =
           for {
             promise <- Promise.make[Nothing, Unit]
             _       <- handleCommand(command, currentState, promise)
             result  <- promise.await
           } yield result
 
-        def ask[E, A](command: COMMAND): ZIO[SnapshotStorage[STATE] & Journal[EVENT], Storage.PersistError | E, A] =
+        def ask[E, A](
+          command: COMMAND
+        ): ZIO[R & SnapshotStorage[STATE] & Journal[R, EVENT], Storage.PersistError | E, A] =
           for {
             promise <- Promise.make[E, A]
             _       <- handleCommand(command, currentState, promise)
@@ -118,7 +117,7 @@ object EventSourcedEntity {
           } yield result
       }
 
-    ZIO.serviceWithZIO[EntityManager[COMMAND, EVENT, STATE]] { mgr =>
+    ZIO.serviceWithZIO[EntityManager[R, COMMAND, EVENT, STATE]] { mgr =>
       mgr.getOrCreate(persistenceId)(entity)
     }
   }

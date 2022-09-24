@@ -30,7 +30,7 @@ object MyPersistentBehavior {
   final case class State(numbers: List[Long] = Nil)
 
   def apply(id: String) =
-    EventSourcedEntity[Command, Event, State](
+    EventSourcedEntity[Any, Command, Event, State](
       persistenceId = id,
       emptyState = State(),
       commandHandler = (state, cmd) =>
@@ -108,7 +108,7 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
                         .flatMap(f => ZIO.fromOption(f).orElseFail(new Error))
 
           _ <- entity.send(Command.NextNumber(13)) // 4
-          lastEvent <- ZIO.serviceWith[Journal[Event]](_.load("1", snapshot.offset).runCollect.map(_.head)).flatten
+          lastEvent <- ZIO.serviceWith[Journal[Any, Event]](_.load("1", snapshot.offset).runCollect.map(_.head)).flatten
         } yield assert(snapshot)(equalTo(Offseted(4, State()))) && assert(lastEvent.offset)(equalTo(4))
       },
       test("calling same entity doesn't corrupt state") {
@@ -129,7 +129,7 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
         } yield assert(state)(equalTo(List(1, 1, 2, 1, 2, 1, 3, 2, 1, 3, 2, 4, 3, 2, 4, 3, 5, 4, 3, 5, 4, 5, 4, 5, 5)))
       } @@ withLiveClock
     ).provide(
-      EntityManager.live[MyPersistentBehavior.Command, MyPersistentBehavior.Event, MyPersistentBehavior.State],
+      EntityManager.live[Any, MyPersistentBehavior.Command, MyPersistentBehavior.Event, MyPersistentBehavior.State],
       InMemoryJournal.live[MyPersistentBehavior.Event],
       InSnapshotStorage.live[MyPersistentBehavior.State],
       ZIOJSONSerde.live[MyPersistentBehavior.Event]
