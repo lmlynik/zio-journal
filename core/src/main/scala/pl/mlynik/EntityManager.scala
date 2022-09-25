@@ -12,6 +12,8 @@ trait EntityManager[R, COMMAND, EVENT, STATE] {
       Storage.LoadError,
       EntityRef[R, COMMAND, EVENT, STATE]
     ]
+  )(implicit
+    trace: Trace
   ): ZIO[R & Journal[R, EVENT] & SnapshotStorage[R, STATE], Storage.LoadError, EntityRef[R, COMMAND, EVENT, STATE]]
 }
 
@@ -24,7 +26,7 @@ object EntityManager {
         Storage.LoadError,
         EntityRef[R, COMMAND, EVENT, STATE]
       ]
-    ): ZIO[
+    )(implicit trace: Trace): ZIO[
       R & Journal[R, EVENT] & SnapshotStorage[R, STATE],
       Storage.LoadError,
       EntityRef[R, COMMAND, EVENT, STATE]

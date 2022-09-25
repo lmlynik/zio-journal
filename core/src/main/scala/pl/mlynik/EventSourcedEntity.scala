@@ -42,9 +42,9 @@ object EventSourcedEntity {
   def apply[R: Tag, COMMAND: Tag, EVENT: Tag, STATE: Tag](
     persistenceId: String,
     emptyState: STATE,
-    commandHandler: (STATE, COMMAND) => URIO[R & Journal[R, EVENT], Effect[EVENT]],
-    eventHandler: (STATE, EVENT) => UIO[STATE]
-  ) = {
+    commandHandler: (STATE, COMMAND) => Trace ?=> URIO[R & Journal[R, EVENT], Effect[EVENT]],
+    eventHandler: (STATE, EVENT) => Trace ?=> UIO[STATE]
+  )(implicit trace: Trace) = {
 
     type Persistence = R & SnapshotStorage[R, STATE] & Journal[R, EVENT]
 
@@ -56,7 +56,7 @@ object EventSourcedEntity {
 
     def journalPlayback(
       currentState: Ref.Synchronized[State]
-    ) =
+    )(implicit trace: Trace) =
       currentState.updateAndGetZIO { st =>
         for {
           snapshot    <- ZIO.serviceWith[SnapshotStorage[R, STATE]](_.loadLast(persistenceId)).flatten
@@ -71,7 +71,7 @@ object EventSourcedEntity {
     def handleEffect[E, A](
       state: State,
       resultPromise: Promise[E, A]
-    )(effect: Effect[EVENT]): ZIO[Persistence, Storage.PersistError, State] =
+    )(effect: Effect[EVENT])(implicit trace: Trace): ZIO[Persistence, Storage.PersistError, State] =
       for {
         journal         <- ZIO.service[Journal[R, EVENT]]
         snapshotStorage <- ZIO.service[SnapshotStorage[R, STATE]]
@@ -95,7 +95,7 @@ object EventSourcedEntity {
       cmd: COMMAND,
       currentState: Ref.Synchronized[State],
       resultPromise: Promise[E, A]
-    ): ZIO[Persistence, Storage.PersistError, State] =
+    )(implicit trace: Trace): ZIO[Persistence, Storage.PersistError, State] =
       currentState.updateAndGetZIO { st =>
         commandHandler(st.entity, cmd).flatMap(handleEffect(st, resultPromise))
       } <* resultPromise.isDone.flatMap(done => ZIO.unless(done)(resultPromise.succeed(().asInstanceOf[A])))
@@ -107,11 +107,11 @@ object EventSourcedEntity {
         _            <- ZIO.logInfo(s"Loaded $persistenceId")
 
       } yield new EntityRef[R, COMMAND, EVENT, STATE] {
-        override def state: UIO[STATE] = currentState.get.map(_._2)
+        override def state(implicit trace: Trace): UIO[STATE] = currentState.get.map(_._2)
 
         override def send(
           command: COMMAND
-        ): ZIO[Persistence, Storage.PersistError, Unit] =
+        )(implicit trace: Trace): ZIO[Persistence, Storage.PersistError, Unit] =
           for {
             promise <- Promise.make[Nothing, Unit]
             _       <- handleCommand(command, currentState, promise)
@@ -120,7 +120,7 @@ object EventSourcedEntity {
 
         def ask[E, A](
           command: COMMAND
-        ): ZIO[Persistence, Storage.PersistError | E, A] =
+        )(implicit trace: Trace): ZIO[Persistence, Storage.PersistError | E, A] =
           for {
             promise <- Promise.make[E, A]
             _       <- handleCommand(command, currentState, promise)

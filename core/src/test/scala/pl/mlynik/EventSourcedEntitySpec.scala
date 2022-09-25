@@ -34,21 +34,24 @@ object MyPersistentBehavior {
       persistenceId = id,
       emptyState = State(),
       commandHandler = (state, cmd) =>
+        import Effect.*
         cmd match
-          case Command.NextMessage(value) => Effect.persistZIO(Event.NextMessageAdded(value))
+          case Command.NextMessage(value) =>
+            persistZIO(Event.NextMessageAdded(value))
           case Command.Clear              =>
-            Effect.persistZIO(Event.Cleared) >>> Effect.snapshotZIO
+            persistZIO(Event.Cleared) >>> snapshotZIO
           case Command.Get                =>
-            Effect.reply(ZIO.succeed(state.numbers))
+            reply(ZIO.succeed(state.numbers))
           case Command.Fail               =>
-            Effect.reply(ZIO.fail(FailResponse))
+            reply(ZIO.fail(FailResponse))
       ,
-      eventHandler = (state, evt) =>
+      eventHandler = (state: State, evt: Event) =>
         evt match
           case Event.NextMessageAdded(value) =>
             ZIO
               .succeed(state.copy(numbers = state.numbers :+ value))
-          case Event.Cleared                 => ZIO.succeed(State())
+          case Event.Cleared                 =>
+            ZIO.succeed(State())
     )
 }
 object EventSourcedEntitySpec extends ZIOSpecDefault {
@@ -111,19 +114,20 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
         } yield assert(snapshot)(equalTo(Offseted(4, State()))) && assert(lastEvent.offset)(equalTo(4))
       },
       test("calling same entity doesn't corrupt state") {
+
         def run(id: String, message: String) =
           MyPersistentBehavior(id).flatMap { entity =>
             ZIO.foreach(1 to 3) { x =>
               val msg = message + " " + x
-              entity.send(Command.NextMessage(msg)) *> ZIO.sleep(50.millis)
+              entity.send(Command.NextMessage(msg)) *> ZIO.sleep(20.millis)
             }
           }
         for {
           id     <- Random.nextString(10)
           f1     <- run(id, "Hello").repeatN(3).delay(0.millis).fork
-          f2     <- run(id, "World").repeatN(3).delay(25.millis).fork
-          _      <- f1.await
-          _      <- f2.await
+          f2     <- run(id, "World").repeatN(3).delay(10.millis).fork
+          _      <- f1.join
+          _      <- f2.join
           entity <- MyPersistentBehavior(id)
           state  <- entity.ask[Nothing, List[Long]](Command.Get)
           _      <- entity.send(Command.Clear)
