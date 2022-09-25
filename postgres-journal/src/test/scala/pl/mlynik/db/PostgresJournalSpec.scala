@@ -22,16 +22,62 @@ object PostgresJournalSpec extends ZIOSpecDefault {
     case Complex(event: List[Event])
   }
 
-  given JsonCodec[Event] = DeriveJsonCodec.gen[Event]
-
   def spec =
     (suite("PostgresJournalSpec")(
-      test("persists events") {
+      test("persists nad loads events in correct order") {
         for {
-          journal <- ZIO.service[Journal[Clock & DataSource, Event]]
+          journal <- ZIO.service[Journal[DataSource, Event]]
           _       <- journal.persist("1", 0, Event.NextNumberAdded(13))
-        } yield assert(List(13))(equalTo(List(13)))
+          _       <- journal.persist("1", 1, Event.NextNumberAdded(14))
+          _       <- journal.persist("2", 0, Event.Complex(Event.Complex(Event.NextNumberAdded(2137) :: Nil) :: Nil))
+          events1 <- journal.load("1", 0).runCollect
+          events2 <- journal.load("2", 0).runCollect
+        } yield assert(events1)(
+          equalTo(
+            Chunk(
+              Offseted(
+                offset = 0,
+                value = Event.NextNumberAdded(value = 13)
+              ),
+              Offseted(
+                offset = 1,
+                value = Event.NextNumberAdded(value = 14)
+              )
+            )
+          )
+        ) && assert(events2)(
+          equalTo(
+            Chunk(
+              Offseted(offset = 0, value = Event.Complex(Event.Complex(Event.NextNumberAdded(2137) :: Nil) :: Nil))
+            )
+          )
+        )
       },
+      test("loads events from the specified offset") {
+        for {
+          journal <- ZIO.service[Journal[DataSource, Event]]
+          _       <- journal.persist("1", 0, Event.NextNumberAdded(13))
+          _       <- journal.persist("1", 1, Event.NextNumberAdded(14))
+          events1 <- journal.load("1", 1).runCollect
+        } yield assert(events1)(
+          equalTo(
+            Chunk(
+              Offseted(
+                offset = 1,
+                value = Event.NextNumberAdded(value = 14)
+              )
+            )
+          )
+        )
+      },
+      test("loads events from the specified offset - empty") {
+        for {
+          journal <- ZIO.service[Journal[DataSource, Event]]
+          _       <- journal.persist("1", 0, Event.NextNumberAdded(13))
+          _       <- journal.persist("1", 1, Event.NextNumberAdded(14))
+          events1 <- journal.load("1", 2).runCollect
+        } yield assert(events1)(equalTo(Chunk.empty))
+      }
     ) @@ withLiveClock @@ TestAspect.before(DbContext.migrate())).provide(
       ZPostgreSQLContainer.Settings.default,
       ZPostgreSQLContainer.live,

@@ -15,17 +15,14 @@ import javax.sql.DataSource
 
 final class PostgresJournal[EVENT](
   serde: Serde[EVENT, Array[Byte]]
-) extends Journal[Clock & DataSource, EVENT] {
+) extends Journal[DataSource, EVENT] {
 
   import DbContext.*
 
-  given encodeUUID: MappedEncoding[Instant, Timestamp] = MappedEncoding[Instant, Timestamp](null)
-  given decodeUUID: MappedEncoding[Timestamp, Instant] = MappedEncoding[Timestamp, Instant](null)
-
   case class SqlError(io: SQLException) extends Storage.PersistError with Storage.LoadError
-  override def persist(id: String, offset: Long, event: EVENT): ZIO[Clock & DataSource, Storage.PersistError, Unit] = {
+  override def persist(id: String, offset: Long, event: EVENT): ZIO[DataSource, Storage.PersistError, Unit] = {
     val i = for {
-      instant <- ZIO.serviceWithZIO[Clock](_.instant)
+      instant <- Clock.instant
       payload <- serde.serialize(event)
       insert   = quote {
                    query[JournalRow].insertValue(lift(JournalRow(id, offset, instant.toEpochMilli, payload)))
@@ -42,11 +39,11 @@ final class PostgresJournal[EVENT](
     }
   }
 
-  override def load(id: String, loadFrom: Long): ZStream[Clock & DataSource, Storage.LoadError, Offseted[EVENT]] = {
+  override def load(id: String, loadFrom: Long): ZStream[DataSource, Storage.LoadError, Offseted[EVENT]] = {
     val load: StreamResult[JournalRow] = stream(
       query[JournalRow]
         .filter(row => row.persistenceId == lift(id) && row.sequenceNumber >= lift(loadFrom))
-        .sortBy(_.sequenceNumber)(Ord.desc)
+        .sortBy(_.sequenceNumber)(Ord.asc)
     )
 
     load.mapError(sqlError => SqlError(sqlError)).via(deserialize)
@@ -54,7 +51,7 @@ final class PostgresJournal[EVENT](
 }
 
 object PostgresJournal {
-  def live[EVENT: Tag]: ZLayer[Serde[EVENT, Array[Byte]], Nothing, Journal[Clock & DataSource, EVENT]] =
+  def live[EVENT: Tag]: ZLayer[Serde[EVENT, Array[Byte]], Nothing, Journal[DataSource, EVENT]] =
     ZLayer.fromZIO {
       for {
         serde <- ZIO.service[Serde[EVENT, Array[Byte]]]

@@ -12,7 +12,13 @@ object DbContext extends PostgresZioJdbcContext(SnakeCase) {
   def migrate(): RIO[DataSource, Unit] = for {
     ds        <- ZIO.service[DataSource]
     migration <- ZIO.attempt {
-                   Flyway.configure().dataSource(ds).locations("db").outOfOrder(true).load()
+                   Flyway
+                     .configure()
+                     .dataSource(ds)
+                     .locations("db")
+                     .table("zio-journal-postgres-flyway-history")
+                     .outOfOrder(false)
+                     .load()
                  }
     _         <- ZIO.attempt(migration.repair())
     _         <- ZIO.attempt(migration.migrate())

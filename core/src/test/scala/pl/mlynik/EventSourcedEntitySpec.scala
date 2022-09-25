@@ -52,9 +52,7 @@ object MyPersistentBehavior {
 }
 object EventSourcedEntitySpec extends ZIOSpecDefault {
   import MyPersistentBehavior.*
-
-  given JsonCodec[MyPersistentBehavior.Event] = DeriveJsonCodec.gen[MyPersistentBehavior.Event]
-  def spec                                    =
+  def spec =
     suite("EventSourcedEntitySpec")(
       test("Accepts commands which update states") {
         for {

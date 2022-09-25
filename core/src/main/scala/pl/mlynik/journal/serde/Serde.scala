@@ -1,6 +1,8 @@
 package pl.mlynik.journal.serde
 
-import zio._
+import zio.*
+
+import scala.deriving.Mirror
 
 trait Serde[DOMAIN, PAYLOAD] {
 
@@ -14,7 +16,7 @@ object ZIOJSONSerde {
 
   import zio.json._
 
-  private class Impl[DOMAIN: Tag](using JsonCodec[DOMAIN]) extends Serde[DOMAIN, String] {
+  class Impl[DOMAIN: Tag](using JsonCodec[DOMAIN]) extends Serde[DOMAIN, String] {
 
     override def id: String                             = "zio-json"
     override def serialize(domain: DOMAIN): UIO[String] = ZIO.attempt(domain.toJson).orDie
@@ -23,18 +25,20 @@ object ZIOJSONSerde {
       ZIO.fromEither(payload.fromJson[DOMAIN]).mapError(r => new Error(r)).orDie
   }
 
-  // TODO work on better derivation, macro?
-  def live[DOMAIN: Tag](using JsonCodec[DOMAIN]): ULayer[Serde[DOMAIN, String]] =
+  inline def live[DOMAIN](using mirror: Mirror.Of[DOMAIN]): ULayer[Serde[DOMAIN, String]] = {
+    given JsonCodec[DOMAIN] = DeriveJsonCodec.gen[DOMAIN]
+
     ZLayer.succeed(new Impl[DOMAIN])
+  }
 }
 
 object ZIOJSONByteArraySerde {
 
   import zio.json._
 
-  private class Impl[DOMAIN: Tag](using JsonCodec[DOMAIN]) extends Serde[DOMAIN, Array[Byte]] {
+  class Impl[DOMAIN: Tag](using JsonCodec[DOMAIN]) extends Serde[DOMAIN, Array[Byte]] {
 
-    override def id: String                             = "zio-json-byte-array"
+    override def id: String                                  = "zio-json-byte-array"
     override def serialize(domain: DOMAIN): UIO[Array[Byte]] = ZIO.attempt(domain.toJson.getBytes("UTF-8")).orDie
 
     override def deserialize(payload: Array[Byte]): UIO[DOMAIN] =
@@ -42,8 +46,10 @@ object ZIOJSONByteArraySerde {
   }
 
   // TODO work on better derivation, macro?
-  def live[DOMAIN: Tag](using JsonCodec[DOMAIN]): ULayer[Serde[DOMAIN, Array[Byte]]] =
+  inline def live[DOMAIN](using mirror: Mirror.Of[DOMAIN]): ULayer[Serde[DOMAIN, Array[Byte]]] = {
+    given JsonCodec[DOMAIN] = DeriveJsonCodec.gen[DOMAIN]
     ZLayer.succeed(new Impl[DOMAIN])
+  }
 }
 
 object NoopSerde {
