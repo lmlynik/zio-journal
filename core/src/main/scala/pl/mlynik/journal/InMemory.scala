@@ -49,7 +49,8 @@ object InMemoryJournal {
   }
 }
 
-final class InSnapshotStorage[STATE](storage: ConcurrentMap[String, Offseted[STATE]]) extends SnapshotStorage[STATE] {
+final class InSnapshotStorage[STATE](storage: ConcurrentMap[String, Offseted[STATE]])
+    extends SnapshotStorage[Any, STATE] {
   def store(id: String, state: Offseted[STATE]): IO[PersistError, Unit] =
     storage.put(id, state).unit
 
@@ -57,7 +58,7 @@ final class InSnapshotStorage[STATE](storage: ConcurrentMap[String, Offseted[STA
 }
 
 object InSnapshotStorage {
-  def live[STATE: Tag]: ZLayer[Any, Nothing, SnapshotStorage[STATE]] = ZLayer.fromZIO {
+  def live[STATE: Tag]: ZLayer[Any, Nothing, SnapshotStorage[Any, STATE]] = ZLayer.fromZIO {
     for {
       ref <- ConcurrentMap.make[String, Offseted[STATE]]()
     } yield new InSnapshotStorage(ref)

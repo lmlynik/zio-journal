@@ -18,7 +18,8 @@ object ZIOJSONSerde {
 
   class Impl[DOMAIN: Tag](using JsonCodec[DOMAIN]) extends Serde[DOMAIN, String] {
 
-    override def id: String                             = "zio-json"
+    override def id: String = "zio-json"
+
     override def serialize(domain: DOMAIN): UIO[String] = ZIO.attempt(domain.toJson).orDie
 
     override def deserialize(payload: String): UIO[DOMAIN] =
@@ -38,7 +39,8 @@ object ZIOJSONByteArraySerde {
 
   class Impl[DOMAIN: Tag](using JsonCodec[DOMAIN]) extends Serde[DOMAIN, Array[Byte]] {
 
-    override def id: String                                  = "zio-json-byte-array"
+    override def id: String = "zio-json-byte-array"
+
     override def serialize(domain: DOMAIN): UIO[Array[Byte]] = ZIO.attempt(domain.toJson.getBytes("UTF-8")).orDie
 
     override def deserialize(payload: Array[Byte]): UIO[DOMAIN] =

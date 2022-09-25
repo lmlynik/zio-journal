@@ -17,7 +17,7 @@ import io.github.scottweaver.zio.testcontainers.postgres.ZPostgreSQLContainer
 object PostgresJournalSpec extends ZIOSpecDefault {
 
   enum Event {
-    case NextNumberAdded(value: Long)
+    case NextMessageAdded(value: Long)
     case Cleared
     case Complex(event: List[Event])
   }
@@ -27,9 +27,9 @@ object PostgresJournalSpec extends ZIOSpecDefault {
       test("persists nad loads events in correct order") {
         for {
           journal <- ZIO.service[Journal[DataSource, Event]]
-          _       <- journal.persist("1", 0, Event.NextNumberAdded(13))
-          _       <- journal.persist("1", 1, Event.NextNumberAdded(14))
-          _       <- journal.persist("2", 0, Event.Complex(Event.Complex(Event.NextNumberAdded(2137) :: Nil) :: Nil))
+          _       <- journal.persist("1", 0, Event.NextMessageAdded(13))
+          _       <- journal.persist("1", 1, Event.NextMessageAdded(14))
+          _       <- journal.persist("2", 0, Event.Complex(Event.Complex(Event.NextMessageAdded(2137) :: Nil) :: Nil))
           events1 <- journal.load("1", 0).runCollect
           events2 <- journal.load("2", 0).runCollect
         } yield assert(events1)(
@@ -37,18 +37,18 @@ object PostgresJournalSpec extends ZIOSpecDefault {
             Chunk(
               Offseted(
                 offset = 0,
-                value = Event.NextNumberAdded(value = 13)
+                value = Event.NextMessageAdded(value = 13)
               ),
               Offseted(
                 offset = 1,
-                value = Event.NextNumberAdded(value = 14)
+                value = Event.NextMessageAdded(value = 14)
               )
             )
           )
         ) && assert(events2)(
           equalTo(
             Chunk(
-              Offseted(offset = 0, value = Event.Complex(Event.Complex(Event.NextNumberAdded(2137) :: Nil) :: Nil))
+              Offseted(offset = 0, value = Event.Complex(Event.Complex(Event.NextMessageAdded(2137) :: Nil) :: Nil))
             )
           )
         )
@@ -56,15 +56,15 @@ object PostgresJournalSpec extends ZIOSpecDefault {
       test("loads events from the specified offset") {
         for {
           journal <- ZIO.service[Journal[DataSource, Event]]
-          _       <- journal.persist("1", 0, Event.NextNumberAdded(13))
-          _       <- journal.persist("1", 1, Event.NextNumberAdded(14))
+          _       <- journal.persist("1", 0, Event.NextMessageAdded(13))
+          _       <- journal.persist("1", 1, Event.NextMessageAdded(14))
           events1 <- journal.load("1", 1).runCollect
         } yield assert(events1)(
           equalTo(
             Chunk(
               Offseted(
                 offset = 1,
-                value = Event.NextNumberAdded(value = 14)
+                value = Event.NextMessageAdded(value = 14)
               )
             )
           )
@@ -73,8 +73,8 @@ object PostgresJournalSpec extends ZIOSpecDefault {
       test("loads events from the specified offset - empty") {
         for {
           journal <- ZIO.service[Journal[DataSource, Event]]
-          _       <- journal.persist("1", 0, Event.NextNumberAdded(13))
-          _       <- journal.persist("1", 1, Event.NextNumberAdded(14))
+          _       <- journal.persist("1", 0, Event.NextMessageAdded(13))
+          _       <- journal.persist("1", 1, Event.NextMessageAdded(14))
           events1 <- journal.load("1", 2).runCollect
         } yield assert(events1)(equalTo(Chunk.empty))
       }

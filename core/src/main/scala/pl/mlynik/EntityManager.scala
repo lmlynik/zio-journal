@@ -8,11 +8,11 @@ trait EntityManager[R, COMMAND, EVENT, STATE] {
 
   def getOrCreate(persistenceId: String)(
     entityRef: ZIO[
-      R & Journal[R, EVENT] & SnapshotStorage[STATE],
+      R & Journal[R, EVENT] & SnapshotStorage[R, STATE],
       Storage.LoadError,
       EntityRef[R, COMMAND, EVENT, STATE]
     ]
-  ): ZIO[R & Journal[R, EVENT] & SnapshotStorage[STATE], Storage.LoadError, EntityRef[R, COMMAND, EVENT, STATE]]
+  ): ZIO[R & Journal[R, EVENT] & SnapshotStorage[R, STATE], Storage.LoadError, EntityRef[R, COMMAND, EVENT, STATE]]
 }
 
 object EntityManager {
@@ -20,18 +20,19 @@ object EntityManager {
       extends EntityManager[R, COMMAND, EVENT, STATE] {
     def getOrCreate(persistenceId: String)(
       entityRef: ZIO[
-        R & Journal[R, EVENT] & SnapshotStorage[STATE],
+        R & Journal[R, EVENT] & SnapshotStorage[R, STATE],
         Storage.LoadError,
         EntityRef[R, COMMAND, EVENT, STATE]
       ]
-    ): ZIO[R & Journal[R, EVENT] & SnapshotStorage[STATE], Storage.LoadError, EntityRef[R, COMMAND, EVENT, STATE]] = {
-      val w = ref.get(persistenceId).flatMap {
+    ): ZIO[
+      R & Journal[R, EVENT] & SnapshotStorage[R, STATE],
+      Storage.LoadError,
+      EntityRef[R, COMMAND, EVENT, STATE]
+    ] =
+      ref.get(persistenceId).flatMap {
         case Some(value) => ZIO.succeed(value)
         case None        => entityRef.flatMap(r => ref.put(persistenceId, r)) *> getOrCreate(persistenceId)(entityRef)
       }
-
-      w
-    }
   }
 
   def live[R: Tag, COMMAND: Tag, EVENT: Tag, STATE: Tag]

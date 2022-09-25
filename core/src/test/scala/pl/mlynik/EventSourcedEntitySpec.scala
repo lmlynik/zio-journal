@@ -14,7 +14,7 @@ object MyPersistentBehavior {
 
   import EventSourcedEntity.*
   enum Command {
-    case NextNumber(value: Long)
+    case NextMessage(value: String)
     case Clear
     case Get
     case Fail
@@ -23,11 +23,11 @@ object MyPersistentBehavior {
   case object FailResponse
 
   enum Event {
-    case NextNumberAdded(value: Long)
+    case NextMessageAdded(value: String)
     case Cleared
   }
 
-  final case class State(numbers: List[Long] = Nil)
+  final case class State(numbers: List[String] = Nil)
 
   def apply(id: String) =
     EventSourcedEntity[Any, Command, Event, State](
@@ -35,19 +35,20 @@ object MyPersistentBehavior {
       emptyState = State(),
       commandHandler = (state, cmd) =>
         cmd match
-          case Command.NextNumber(value) => Effect.persistZIO(Event.NextNumberAdded(value))
-          case Command.Clear             => Effect.complexZIO(Effect.persistZIO(Event.Cleared), Effect.snapshotZIO)
-          case Command.Get               =>
+          case Command.NextMessage(value) => Effect.persistZIO(Event.NextMessageAdded(value))
+          case Command.Clear              =>
+            Effect.persistZIO(Event.Cleared) >>> Effect.snapshotZIO
+          case Command.Get                =>
             Effect.reply(ZIO.succeed(state.numbers))
-          case Command.Fail              =>
+          case Command.Fail               =>
             Effect.reply(ZIO.fail(FailResponse))
       ,
       eventHandler = (state, evt) =>
         evt match
-          case Event.NextNumberAdded(value) =>
+          case Event.NextMessageAdded(value) =>
             ZIO
               .succeed(state.copy(numbers = state.numbers :+ value))
-          case Event.Cleared                => ZIO.succeed(State())
+          case Event.Cleared                 => ZIO.succeed(State())
     )
 }
 object EventSourcedEntitySpec extends ZIOSpecDefault {
@@ -57,21 +58,21 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
       test("Accepts commands which update states") {
         for {
           entity <- MyPersistentBehavior("1")
-          _      <- entity.send(Command.NextNumber(13))
+          _      <- entity.send(Command.NextMessage("message"))
           state  <- entity.state
-        } yield assert(state.numbers)(equalTo(List(13)))
+        } yield assert(state.numbers)(equalTo(List("message")))
       },
       test("Accepts asks which returns value") {
         for {
           entity   <- MyPersistentBehavior("1")
-          _        <- entity.send(Command.NextNumber(13))
+          _        <- entity.send(Command.NextMessage("message"))
           response <- entity.ask[Nothing, List[Long]](Command.Get)
-        } yield assert(response)(equalTo(List(13)))
+        } yield assert(response)(equalTo(List("message")))
       },
       test("Accepts asks which returns errors") {
         for {
           entity   <- MyPersistentBehavior("1")
-          _        <- entity.send(Command.NextNumber(13))
+          _        <- entity.send(Command.NextMessage("message"))
           response <- entity.ask[FailResponse.type, List[Long]](Command.Fail).either
         } yield assert(response)(isLeft(equalTo(FailResponse)))
       },
@@ -79,7 +80,7 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
         def run(id: String) = for {
           entity   <- MyPersistentBehavior(id)
           ns       <- ZIO.foreach(1 to 1000)(_ => Random.nextInt)
-          _        <- ZIO.foreach(ns)(n => entity.send(Command.NextNumber(n)))
+          _        <- ZIO.foreach(ns)(n => entity.send(Command.NextMessage(s"message $n")))
           response <- entity.ask[Nothing, List[Long]](Command.Get)
         } yield (ns, response)
         for {
@@ -96,36 +97,67 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
 
         for {
           entity   <- MyPersistentBehavior("1")
-          _ <- entity.send(Command.NextNumber(13)) // 0
-          _ <- entity.send(Command.NextNumber(13)) // 1
-          _ <- entity.send(Command.NextNumber(13)) // 2
-          _ <- entity.send(Command.Clear)          // 3
+          _ <- entity.send(Command.NextMessage("message")) // 0
+          _ <- entity.send(Command.NextMessage("message")) // 1
+          _ <- entity.send(Command.NextMessage("message")) // 2
+          _ <- entity.send(Command.Clear)                  // 3
           snapshot <- ZIO
-                        .serviceWith[SnapshotStorage[State]](_.loadLast("1"))
+                        .serviceWith[SnapshotStorage[Any, State]](_.loadLast("1"))
                         .flatten
                         .flatMap(f => ZIO.fromOption(f).orElseFail(new Error))
 
-          _ <- entity.send(Command.NextNumber(13)) // 4
+          _ <- entity.send(Command.NextMessage("message")) // 4
           lastEvent <- ZIO.serviceWith[Journal[Any, Event]](_.load("1", snapshot.offset).runCollect.map(_.head)).flatten
         } yield assert(snapshot)(equalTo(Offseted(4, State()))) && assert(lastEvent.offset)(equalTo(4))
       },
       test("calling same entity doesn't corrupt state") {
-        def run(i: Int) =
-          MyPersistentBehavior("concurrenct1").flatMap { entity =>
-            ZIO.foreach(1 to 5) { _ =>
-              entity.send(Command.NextNumber(i)) *> ZIO.sleep(50.milliseconds)
+        def run(id: String, message: String) =
+          MyPersistentBehavior(id).flatMap { entity =>
+            ZIO.foreach(1 to 3) { x =>
+              val msg = message + " " + x
+              entity.send(Command.NextMessage(msg)) *> ZIO.sleep(50.millis)
             }
-          } *> ZIO.log("Finished adding numbers on fiber")
+          }
         for {
-          fibers <- ZIO.foreach(1 to 5) { millis =>
-                      val d = (millis * 100).milliseconds
-                      run(millis).delay(d).fork
-                    }
-          _      <- ZIO.foreach(fibers)(_.join)
-          entity <- MyPersistentBehavior("concurrenct1")
+          id     <- Random.nextString(10)
+          f1     <- run(id, "Hello").repeatN(3).delay(0.millis).fork
+          f2     <- run(id, "World").repeatN(3).delay(25.millis).fork
+          _      <- f1.await
+          _      <- f2.await
+          entity <- MyPersistentBehavior(id)
           state  <- entity.ask[Nothing, List[Long]](Command.Get)
-        } yield assert(state)(equalTo(List(1, 1, 2, 1, 2, 1, 3, 2, 1, 3, 2, 4, 3, 2, 4, 3, 5, 4, 3, 5, 4, 5, 4, 5, 5)))
-      } @@ withLiveClock
+          _      <- entity.send(Command.Clear)
+        } yield assert(state)(
+          equalTo(
+            List(
+              "Hello 1",
+              "World 1",
+              "Hello 2",
+              "World 2",
+              "Hello 3",
+              "World 3",
+              "Hello 1",
+              "World 1",
+              "Hello 2",
+              "World 2",
+              "Hello 3",
+              "World 3",
+              "Hello 1",
+              "World 1",
+              "Hello 2",
+              "World 2",
+              "Hello 3",
+              "World 3",
+              "Hello 1",
+              "World 1",
+              "Hello 2",
+              "World 2",
+              "Hello 3",
+              "World 3"
+            )
+          )
+        )
+      } @@ withLiveClock @@ withLiveRandom @@ nonFlaky
     ).provide(
       EntityManager.live[Any, MyPersistentBehavior.Command, MyPersistentBehavior.Event, MyPersistentBehavior.State],
       InMemoryJournal.live[MyPersistentBehavior.Event],

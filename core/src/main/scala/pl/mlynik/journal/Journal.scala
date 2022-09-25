@@ -17,8 +17,8 @@ trait Journal[R, EVENT] {
   def load(id: String, loadFrom: Long): ZStream[R, LoadError, Offseted[EVENT]]
 }
 
-trait SnapshotStorage[STATE] {
-  def store(id: String, state: Offseted[STATE]): IO[PersistError, Unit]
+trait SnapshotStorage[R, STATE] {
+  def store(id: String, state: Offseted[STATE]): ZIO[R, PersistError, Unit]
 
-  def loadLast(id: String): IO[LoadError, Option[Offseted[STATE]]]
+  def loadLast(id: String): ZIO[R, LoadError, Option[Offseted[STATE]]]
 }
