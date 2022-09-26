@@ -109,11 +109,11 @@ object EventSourcedEntity {
       } yield new EntityRef[R, COMMAND, EVENT, STATE] {
         override def state(implicit trace: Trace): UIO[STATE] = currentState.get.map(_._2)
 
-        override def send(
+        override def send[E](
           command: COMMAND
-        )(implicit trace: Trace): ZIO[Persistence, Storage.PersistError, Unit] =
+        )(implicit trace: Trace): ZIO[Persistence, Storage.PersistError | E, Unit] =
           for {
-            promise <- Promise.make[Nothing, Unit]
+            promise <- Promise.make[E, Unit]
             _       <- handleCommand(command, currentState, promise)
             result  <- promise.await
           } yield result
