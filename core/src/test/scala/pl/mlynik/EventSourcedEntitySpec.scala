@@ -8,93 +8,21 @@ import zio.test.Assertion.*
 import pl.mlynik.journal.*
 import pl.mlynik.journal.Storage.Offseted
 import pl.mlynik.journal.serde.ZIOJSONSerde
+import pl.mlynik.journal.Storage.LoadError
 
-object MyPersistentBehavior {
-
-  import EventSourcedEntity.*
-
-  enum FailureMode {
-    case Success
-    case Fail
-    case Die
-  }
-  enum Command     {
-    case NextMessage(value: String)
-    case NextMessageDoubleAndFail(value: String, failureMode: FailureMode)
-    case Clear
-    case Get
-    case Fail
-    case Die
-    case Log
-  }
-
-  case object FailResponse
-
-  enum Event {
-    case NextMessageAdded(value: String)
-    case Cleared
-    case Logged(spans: List[String])
-  }
-
-  final case class State(numbers: List[String] = Nil)
-
-  def apply(id: String) =
-    EventSourcedEntity[Any, Command, Event, State](
-      persistenceId = id,
-      emptyState = State(),
-      commandHandler = (state, cmd) =>
-        import Effect.*
-        cmd match
-          case Command.NextMessage(value)                           =>
-            persistZIO(Event.NextMessageAdded(value))
-          case Command.Clear                                        =>
-            persistZIO(Event.Cleared) >>> snapshotZIO
-          case Command.Get                                          =>
-            reply(ZIO.succeed(state.numbers))
-          case Command.Fail                                         =>
-            reply(ZIO.fail(FailResponse))
-          case Command.Die                                          =>
-            ZIO.die(new Error("i'm dead"))
-          case Command.NextMessageDoubleAndFail(value, failureMode) =>
-            val failTransaction =
-              failureMode match
-                case FailureMode.Success => none
-                case FailureMode.Fail    =>
-                  reply(
-                    ZIO.fail(
-                      FailResponse
-                    )
-                  )
-                case FailureMode.Die     =>
-                  ZIO.die(
-                    new Error(
-                      "i'm dead"
-                    )
-                  )
-            persistZIO(Event.NextMessageAdded(value)) >>>
-              persistZIO(Event.NextMessageAdded(value)) >>>
-              failTransaction
-
-          case Command.Log =>
-            ZIO.logSpan("handling of log command") {
-              FiberRef.currentLogSpan.get.flatMap { spans =>
-                ZIO.log("Log Command").delay(10.millis) *> persistZIO(Event.Logged(spans.map(_.label)))
-              }
-            }
-      ,
-      eventHandler = (state: State, evt: Event) =>
-        evt match
-          case Event.NextMessageAdded(value) =>
-            ZIO
-              .succeed(state.copy(numbers = state.numbers :+ value))
-          case Event.Cleared                 =>
-            ZIO.succeed(State())
-          case Event.Logged(spans)           =>
-            ZIO.succeed(State(spans))
-    )
-}
 object EventSourcedEntitySpec extends ZIOSpecDefault {
   import MyPersistentBehavior.*
+
+  private final case class EventsAndSnapshot(events: Chunk[Offseted[Event]], snapshot: Option[Offseted[State]])
+
+  private def getJournalAndSnapshot(
+    id: String
+  ): ZIO[Journal[Any, Event] & SnapshotStorage[Any, State], LoadError, EventsAndSnapshot] =
+    for {
+      events   <- ZIO.serviceWithZIO[Journal[Any, MyPersistentBehavior.Event]](_.load("1", 0).runCollect)
+      snapshot <- ZIO.serviceWithZIO[SnapshotStorage[Any, State]](_.loadLast("1"))
+    } yield EventsAndSnapshot(events, snapshot)
+
   def spec =
     suite("EventSourcedEntitySpec")(
       test("Accepts commands which update states") {
@@ -108,20 +36,20 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
         for {
           entity   <- MyPersistentBehavior("1")
           _        <- entity.send(Command.NextMessage("message"))
-          response <- entity.ask[Nothing, List[String]](Command.Get)
+          response <- entity.ask[List[String]](Command.Get)
         } yield assert(response)(equalTo(List("message")))
       },
       test("Accepts asks which returns errors") {
         for {
           entity   <- MyPersistentBehavior("1")
           _        <- entity.send(Command.NextMessage("message"))
-          response <- entity.ask[FailResponse.type, List[String]](Command.Fail).either
-        } yield assert(response)(isLeft(equalTo(FailResponse)))
+          response <- entity.ask[List[String]](Command.Fail).either
+        } yield assert(response)(isLeft(equalTo(Error.FailResponse)))
       },
       test("handles commands which die") {
         for {
           entity <- MyPersistentBehavior("1")
-          r      <- entity.send(Command.Die).absorbWith(_ => new Error).either
+          r      <- entity.send(Command.Die).absorbWith(_ => new Throwable).either
         } yield assert(r)(isLeft(hasField("message", _.getMessage, equalTo("i'm dead"))))
       },
       test("multiple persists within a transaction and die should invalidate the events") {
@@ -129,24 +57,26 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
           entity <- MyPersistentBehavior("1")
           r      <- entity
                       .send(Command.NextMessageDoubleAndFail("I'm virus", FailureMode.Die))
-                      .absorbWith(_ => new Error)
+                      .absorbWith(_ => new Throwable)
                       .either
           state  <- entity.state
+          e      <- getJournalAndSnapshot("1")
         } yield assert(r)(isLeft(hasField("message", _.getMessage, equalTo("i'm dead")))) && assert(state)(
           equalTo(State())
-        )
+        ) && assert(e.events)(isEmpty) && assert(e.snapshot)(isNone)
       },
       test("multiple persists within a transaction and fail should invalidate the events") {
         for {
           entity <- MyPersistentBehavior("1")
-          r      <- entity
-                      .send[FailResponse.type](Command.NextMessageDoubleAndFail("I'm virus", FailureMode.Fail))
+          _      <- entity
+                      .send(Command.NextMessageDoubleAndFail("I'm virus", FailureMode.Fail))
                       .either
           state  <- entity.state
+          e      <- getJournalAndSnapshot("1")
         } yield assert(state)(
           equalTo(State())
-        )
-      } @@ ignore,
+        ) && assert(e.events)(isEmpty) && assert(e.snapshot)(isNone)
+      },
       test("propagates trace to the command handler") {
         for {
           entity <- MyPersistentBehavior("1")
@@ -163,7 +93,7 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
           entity   <- MyPersistentBehavior(id)
           ns       <- ZIO.foreach(1 to 1000)(_ => Random.nextInt)
           _        <- ZIO.foreach(ns)(n => entity.send(Command.NextMessage(s"message $n")))
-          response <- entity.ask[Nothing, List[Long]](Command.Get)
+          response <- entity.ask[List[Long]](Command.Get)
         } yield (ns, response)
         for {
           f1 <- run("1").fork
@@ -186,7 +116,7 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
           snapshot <- ZIO
                         .serviceWith[SnapshotStorage[Any, State]](_.loadLast("1"))
                         .flatten
-                        .flatMap(f => ZIO.fromOption(f).orElseFail(new Error))
+                        .flatMap(f => ZIO.fromOption(f).orElseFail(new Throwable))
 
           _ <- entity.send(Command.NextMessage("message")) // 4
           lastEvent <- ZIO.serviceWith[Journal[Any, Event]](_.load("1", snapshot.offset).runCollect.map(_.head)).flatten
@@ -198,17 +128,17 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
           MyPersistentBehavior(id).flatMap { entity =>
             ZIO.foreach(1 to 3) { x =>
               val msg = message + " " + x
-              entity.send(Command.NextMessage(msg)) *> ZIO.sleep(20.millis)
+              entity.send(Command.NextMessage(msg)) *> ZIO.sleep(50.millis)
             }
           }
         for {
           id     <- Random.nextString(10)
           f1     <- run(id, "Hello").repeatN(3).delay(0.millis).fork
-          f2     <- run(id, "World").repeatN(3).delay(10.millis).fork
+          f2     <- run(id, "World").repeatN(3).delay(25.millis).fork
           _      <- f1.join
           _      <- f2.join
           entity <- MyPersistentBehavior(id)
-          state  <- entity.ask[Nothing, List[Long]](Command.Get)
+          state  <- entity.ask[List[String]](Command.Get)
           _      <- entity.send(Command.Clear)
         } yield assert(state)(
           equalTo(
@@ -240,9 +170,16 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
             )
           )
         )
-      } @@ withLiveClock @@ withLiveRandom
+      } @@ withLiveClock @@ withLiveRandom @@ nonFlaky(10)
     ).provide(
-      EntityManager.live[Any, MyPersistentBehavior.Command, MyPersistentBehavior.Event, MyPersistentBehavior.State],
+      EntityManager
+        .live[
+          Any,
+          MyPersistentBehavior.Command,
+          MyPersistentBehavior.Error,
+          MyPersistentBehavior.Event,
+          MyPersistentBehavior.State
+        ],
       InMemoryJournal.live[MyPersistentBehavior.Event],
       InSnapshotStorage.live[MyPersistentBehavior.State],
       ZIOJSONSerde.live[MyPersistentBehavior.Event]

@@ -2,14 +2,14 @@ package pl.mlynik.journal
 
 import zio.*
 
-trait EntityRef[R, COMMAND, EVENT, STATE] {
+trait EntityRef[R, COMMAND, CERR, EVENT, STATE] {
   def state(implicit trace: Trace): UIO[STATE]
 
-  def send[E](command: COMMAND)(implicit
+  def send(command: COMMAND)(implicit
     trace: Trace
-  ): ZIO[R & SnapshotStorage[R, STATE] & Journal[R, EVENT], Storage.PersistError | E, Unit]
+  ): ZIO[R & SnapshotStorage[R, STATE] & Journal[R, EVENT], Storage.PersistError | CERR, Unit]
 
-  def ask[E, A](command: COMMAND)(implicit
+  def ask[A](command: COMMAND)(implicit
     trace: Trace
-  ): ZIO[R & SnapshotStorage[R, STATE] & Journal[R, EVENT], Storage.PersistError | E, A]
+  ): ZIO[R & SnapshotStorage[R, STATE] & Journal[R, EVENT], Storage.PersistError | CERR, A]
 }
