@@ -9,53 +9,19 @@ import scala.annotation.targetName
 
 object EventSourcedEntity {
 
-  enum Effect[+EVENT] {
-    case Persist(event: EVENT)
-    case Snapshot
-    case None
-    case Reply[E, A](result: IO[E, A]) extends Effect[Nothing]
-    case Complex(effects: List[Effect[EVENT]])
-  }
+  type EntityEnvironment[R, CENV, COMMAND, CERR, EVENT, STATE] = R & SnapshotStorage[STATE] & Journal[EVENT] &
+    EntityManager[R, CENV, COMMAND, CERR, EVENT, STATE]
 
-  object Effect {
-
-    type EffectIO[Err, EVENT] = IO[Err, Effect[EVENT]]
-    def persistZIO[EVENT](event: EVENT): UIO[Effect[EVENT]] = ZIO.succeed(Persist(event))
-
-    def snapshotZIO[EVENT]: UIO[Effect[EVENT]] = ZIO.succeed(Snapshot)
-
-    val none: UIO[Effect[Nothing]] = ZIO.succeed(None)
-
-    def complexZIO[Err, EVENT](effects: EffectIO[Err, EVENT]*): EffectIO[Err, EVENT] =
-      ZIO.collectAll(effects).map(f => Complex(f.toList))
-
-    def reply[EVENT, A](result: A): UIO[Effect[EVENT]] =
-      ZIO.succeed(Reply(ZIO.succeed(result)))
-
-    def reply[EVENT, E, A](result: IO[E, A]): UIO[Effect[EVENT]] =
-      ZIO.succeed(Reply(result))
-
-    def fail[EVENT, E, A](result: IO[E, A]): UIO[Effect[EVENT]] =
-      ZIO.succeed(Reply(result))
-
-    extension [EVENT, Err](ef1: EffectIO[Err, EVENT]) {
-      @targetName("andThen")
-      def >>>(ef2: EffectIO[Err, EVENT]) = complexZIO(ef1, ef2)
-    }
-  }
-
-  def apply[R: Tag, COMMAND: Tag, CERR: Tag, EVENT: Tag, STATE: Tag](
+  def apply[R: Tag, CENV: Tag, COMMAND: Tag, CERR: Tag, EVENT: Tag, STATE: Tag](
     persistenceId: String,
     emptyState: STATE,
-    commandHandler: (STATE, COMMAND) => Trace ?=> ZIO[R & Journal[R, EVENT], CERR, Effect[EVENT]],
+    commandHandler: (STATE, COMMAND) => Trace ?=> ZIO[CENV & Journal[EVENT], CERR, Effect[EVENT]],
     eventHandler: (STATE, EVENT) => Trace ?=> UIO[STATE]
   )(implicit trace: Trace): ZIO[
-    R & SnapshotStorage[R, STATE] & Journal[R, EVENT] & EntityManager[R, COMMAND, CERR, EVENT, STATE],
+    CENV & SnapshotStorage[STATE] & Journal[EVENT] & EntityManager[R, CENV, COMMAND, CERR, EVENT, STATE],
     Storage.LoadError,
-    EntityRef[R, COMMAND, CERR, EVENT, STATE]
+    EntityRef[R, CENV, COMMAND, CERR, EVENT, STATE]
   ] = {
-
-    type Persistence = R & SnapshotStorage[R, STATE] & Journal[R, EVENT]
 
     final case class State(offset: Long, entity: STATE) {
       def updateState(entity: STATE): State = this.copy(offset = offset + 1, entity = entity)
@@ -68,9 +34,9 @@ object EventSourcedEntity {
     )(implicit trace: Trace) =
       currentState.updateAndGetZIO { st =>
         for {
-          snapshot    <- ZIO.serviceWith[SnapshotStorage[R, STATE]](_.loadLast(persistenceId)).flatten
+          snapshot    <- ZIO.serviceWith[SnapshotStorage[STATE]](_.loadLast(persistenceId)).flatten
           eventStream <-
-            ZIO.serviceWith[Journal[R, EVENT]](_.load(persistenceId, snapshot.map(_.offset).getOrElse(st.offset)))
+            ZIO.serviceWith[Journal[EVENT]](_.load(persistenceId, snapshot.map(_.offset).getOrElse(st.offset)))
           state       <- eventStream.runFoldZIO(st) { case (state, Offseted(offset, event)) =>
                            eventHandler(state.entity, event).map(stateD => st.updateState(offset, stateD))
                          }
@@ -81,10 +47,10 @@ object EventSourcedEntity {
       state: State,
       resultPromise: Promise[CERR, A],
       effect: Effect[EVENT]
-    )(implicit trace: Trace): ZIO[Persistence, Storage.PersistError | CERR, State] =
+    )(implicit trace: Trace): ZIO[CENV & Journal[EVENT] & SnapshotStorage[STATE], Storage.PersistError | CERR, State] =
       for {
-        journal         <- ZIO.service[Journal[R, EVENT]]
-        snapshotStorage <- ZIO.service[SnapshotStorage[R, STATE]]
+        journal         <- ZIO.service[Journal[EVENT]]
+        snapshotStorage <- ZIO.service[SnapshotStorage[STATE]]
         newState        <- effect match
                              case Effect.Persist(event)   =>
                                (journal.persist(persistenceId, state.offset, event) *> eventHandler(state.entity, event))
@@ -105,23 +71,32 @@ object EventSourcedEntity {
       cmd: COMMAND,
       currentState: Ref.Synchronized[State],
       resultPromise: Promise[CERR, A]
-    )(implicit trace: Trace): ZIO[Persistence, Storage.PersistError | CERR, State] =
+    )(implicit trace: Trace): ZIO[CENV & Journal[EVENT] & SnapshotStorage[STATE], Storage.PersistError | CERR, State] =
       currentState.updateAndGetZIO { st =>
         commandHandler(st.entity, cmd).flatMap(eff => handleEffect(st, resultPromise, eff))
       } <* resultPromise.isDone.flatMap(done => ZIO.unless(done)(resultPromise.succeed(().asInstanceOf[A])))
 
-    def entity: ZIO[Persistence, Storage.LoadError, EntityRef[R, COMMAND, CERR, EVENT, STATE]] =
+    def entity: ZIO[CENV & Journal[EVENT] & SnapshotStorage[STATE], Storage.LoadError, EntityRef[
+      R,
+      CENV,
+      COMMAND,
+      CERR,
+      EVENT,
+      STATE
+    ]] =
       for {
         currentState <- Ref.Synchronized.make(State(0, emptyState))
         _            <- journalPlayback(currentState)
         _            <- ZIO.logInfo(s"Loaded $persistenceId")
 
-      } yield new EntityRef[R, COMMAND, CERR, EVENT, STATE] {
+      } yield new EntityRef[R, CENV, COMMAND, CERR, EVENT, STATE] {
         override def state(implicit trace: Trace): UIO[STATE] = currentState.get.map(_._2)
 
         override def send(
           command: COMMAND
-        )(implicit trace: Trace): ZIO[Persistence, Storage.PersistError | CERR, Unit] =
+        )(implicit
+          trace: Trace
+        ): ZIO[CENV & Journal[EVENT] & SnapshotStorage[STATE], Storage.PersistError | CERR, Unit] =
           for {
             promise <- Promise.make[CERR, Unit]
             _       <- handleCommand(command, currentState, promise)
@@ -130,7 +105,7 @@ object EventSourcedEntity {
 
         def ask[A](
           command: COMMAND
-        )(implicit trace: Trace): ZIO[Persistence, Storage.PersistError | CERR, A] =
+        )(implicit trace: Trace): ZIO[CENV & Journal[EVENT] & SnapshotStorage[STATE], Storage.PersistError | CERR, A] =
           for {
             promise <- Promise.make[CERR, A]
             _       <- handleCommand(command, currentState, promise)
@@ -138,7 +113,7 @@ object EventSourcedEntity {
           } yield result
       }
 
-    ZIO.serviceWithZIO[EntityManager[R, COMMAND, CERR, EVENT, STATE]] { mgr =>
+    ZIO.serviceWithZIO[EntityManager[R, CENV, COMMAND, CERR, EVENT, STATE]] { mgr =>
       mgr.getOrCreate(persistenceId)(entity)
     }
   }

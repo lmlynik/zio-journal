@@ -26,7 +26,7 @@ object PostgresJournalSpec extends ZIOSpecDefault {
     (suite("PostgresJournalSpec")(
       test("persists nad loads events in correct order") {
         for {
-          journal <- ZIO.service[Journal[DataSource, Event]]
+          journal <- ZIO.service[Journal[Event]]
           _       <- journal.persist("1", 0, Event.NextMessageAdded(13))
           _       <- journal.persist("1", 1, Event.NextMessageAdded(14))
           _       <- journal.persist("2", 0, Event.Complex(Event.Complex(Event.NextMessageAdded(2137) :: Nil) :: Nil))
@@ -55,7 +55,7 @@ object PostgresJournalSpec extends ZIOSpecDefault {
       },
       test("loads events from the specified offset") {
         for {
-          journal <- ZIO.service[Journal[DataSource, Event]]
+          journal <- ZIO.service[Journal[Event]]
           _       <- journal.persist("1", 0, Event.NextMessageAdded(13))
           _       <- journal.persist("1", 1, Event.NextMessageAdded(14))
           events1 <- journal.load("1", 1).runCollect
@@ -72,7 +72,7 @@ object PostgresJournalSpec extends ZIOSpecDefault {
       },
       test("loads events from the specified offset - empty") {
         for {
-          journal <- ZIO.service[Journal[DataSource, Event]]
+          journal <- ZIO.service[Journal[Event]]
           _       <- journal.persist("1", 0, Event.NextMessageAdded(13))
           _       <- journal.persist("1", 1, Event.NextMessageAdded(14))
           events1 <- journal.load("1", 2).runCollect

@@ -11,14 +11,14 @@ object Storage {
   final case class Offseted[T](offset: Long, value: T)
 }
 
-trait Journal[R, EVENT] {
-  def persist(id: String, offset: Long, event: EVENT): ZIO[R, PersistError, Unit]
+trait Journal[EVENT] {
+  def persist(id: String, offset: Long, event: EVENT): ZIO[Any, PersistError, Unit]
 
-  def load(id: String, loadFrom: Long): ZStream[R, LoadError, Offseted[EVENT]]
+  def load(id: String, loadFrom: Long): ZStream[Any, LoadError, Offseted[EVENT]]
 }
 
-trait SnapshotStorage[R, STATE] {
-  def store(id: String, state: Offseted[STATE]): ZIO[R, PersistError, Unit]
+trait SnapshotStorage[STATE] {
+  def store(id: String, state: Offseted[STATE]): ZIO[Any, PersistError, Unit]
 
-  def loadLast(id: String): ZIO[R, LoadError, Option[Offseted[STATE]]]
+  def loadLast(id: String): ZIO[Any, LoadError, Option[Offseted[STATE]]]
 }

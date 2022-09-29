@@ -2,7 +2,7 @@ package pl.mlynik
 
 import zio._
 import pl.mlynik.journal.Journal
-import pl.mlynik.EventSourcedEntity.Effect.EffectIO
+import pl.mlynik.Effect.EffectIO
 
 object MyPersistentBehavior {
 
@@ -35,7 +35,7 @@ object MyPersistentBehavior {
 
   final case class State(numbers: List[String] = Nil)
 
-  def commandHandler(state: State, cmd: Command)(using trace: Trace): EffectIO[Error, Event] = {
+  def commandHandler(state: State, cmd: Command)(using trace: Trace): EffectIO[Any, Error, Event] = {
     import Effect.*
     cmd match
       case Command.NextMessage(value)                           =>
@@ -63,6 +63,7 @@ object MyPersistentBehavior {
                   "i'm dead"
                 )
               )
+
         persistZIO(Event.NextMessageAdded(value)) >>>
           persistZIO(Event.NextMessageAdded(value)) >>>
           snapshotZIO >>>
@@ -87,7 +88,7 @@ object MyPersistentBehavior {
         ZIO.succeed(State(spans))
 
   def apply(id: String) =
-    EventSourcedEntity[Any, Command, Error, Event, State](
+    EventSourcedEntity[Any, Any, Command, Error, Event, State](
       persistenceId = id,
       emptyState = State(),
       commandHandler = commandHandler,

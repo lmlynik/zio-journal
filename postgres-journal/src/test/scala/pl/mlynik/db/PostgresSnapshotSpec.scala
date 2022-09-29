@@ -22,7 +22,7 @@ object PostgresSnapshotSpec extends ZIOSpecDefault {
     (suite("PostgresSnapshotSpec")(
       test("stores and retrieves last snapshot") {
         for {
-          snapshotStorage <- ZIO.service[SnapshotStorage[DataSource, SnapshotState]]
+          snapshotStorage <- ZIO.service[SnapshotStorage[SnapshotState]]
           _               <- snapshotStorage.store("1", Offseted(0, SnapshotState("hello")))
           _               <- snapshotStorage.store("1", Offseted(1, SnapshotState("world")))
           sp              <- snapshotStorage.loadLast("1")
@@ -36,7 +36,7 @@ object PostgresSnapshotSpec extends ZIOSpecDefault {
       },
       test("returns None on no snapshot") {
         for {
-          snapshotStorage <- ZIO.service[SnapshotStorage[DataSource, SnapshotState]]
+          snapshotStorage <- ZIO.service[SnapshotStorage[SnapshotState]]
           sp              <- snapshotStorage.loadLast("1")
         } yield assert(sp)(isNone)
       }

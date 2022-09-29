@@ -17,10 +17,10 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
 
   private def getJournalAndSnapshot(
     id: String
-  ): ZIO[Journal[Any, Event] & SnapshotStorage[Any, State], LoadError, EventsAndSnapshot] =
+  ): ZIO[Journal[Event] & SnapshotStorage[State], LoadError, EventsAndSnapshot] =
     for {
-      events   <- ZIO.serviceWithZIO[Journal[Any, MyPersistentBehavior.Event]](_.load("1", 0).runCollect)
-      snapshot <- ZIO.serviceWithZIO[SnapshotStorage[Any, State]](_.loadLast("1"))
+      events   <- ZIO.serviceWithZIO[Journal[MyPersistentBehavior.Event]](_.load("1", 0).runCollect)
+      snapshot <- ZIO.serviceWithZIO[SnapshotStorage[State]](_.loadLast("1"))
     } yield EventsAndSnapshot(events, snapshot)
 
   def spec =
@@ -114,12 +114,12 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
           _ <- entity.send(Command.NextMessage("message")) // 2
           _ <- entity.send(Command.Clear)                  // 3
           snapshot <- ZIO
-                        .serviceWith[SnapshotStorage[Any, State]](_.loadLast("1"))
+                        .serviceWith[SnapshotStorage[State]](_.loadLast("1"))
                         .flatten
                         .flatMap(f => ZIO.fromOption(f).orElseFail(new Throwable))
 
           _ <- entity.send(Command.NextMessage("message")) // 4
-          lastEvent <- ZIO.serviceWith[Journal[Any, Event]](_.load("1", snapshot.offset).runCollect.map(_.head)).flatten
+          lastEvent <- ZIO.serviceWith[Journal[Event]](_.load("1", snapshot.offset).runCollect.map(_.head)).flatten
         } yield assert(snapshot)(equalTo(Offseted(4, State()))) && assert(lastEvent.offset)(equalTo(4))
       },
       test("calling same entity doesn't corrupt state") {
@@ -174,6 +174,7 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
     ).provide(
       EntityManager
         .live[
+          Any,
           Any,
           MyPersistentBehavior.Command,
           MyPersistentBehavior.Error,

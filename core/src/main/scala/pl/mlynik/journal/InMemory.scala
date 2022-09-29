@@ -7,8 +7,10 @@ import zio.concurrent.ConcurrentMap
 import zio.stream.ZStream
 import zio.stream.ZPipeline
 
-final class InMemoryJournal[EVENT](storage: ConcurrentMap[String, List[Offseted[String]]], serde: Serde[EVENT, String])
-    extends Journal[Any, EVENT] {
+final class InMemoryJournal[R, EVENT](
+  storage: ConcurrentMap[String, List[Offseted[String]]],
+  serde: Serde[EVENT, String]
+) extends Journal[EVENT] {
 
   case class LoadIOException(io: Throwable) extends Storage.LoadError
   def persist(id: String, offset: Long, event: EVENT): IO[Storage.PersistError, Unit] =
@@ -41,7 +43,7 @@ final class InMemoryJournal[EVENT](storage: ConcurrentMap[String, List[Offseted[
 }
 
 object InMemoryJournal {
-  def live[EVENT: Tag]: ZLayer[Serde[EVENT, String], Nothing, Journal[Any, EVENT]] = ZLayer.fromZIO {
+  def live[EVENT: Tag]: ZLayer[Serde[EVENT, String], Nothing, Journal[EVENT]] = ZLayer.fromZIO {
     for {
       serde <- ZIO.service[Serde[EVENT, String]]
       mp    <- ConcurrentMap.make[String, List[Offseted[String]]]()
@@ -49,8 +51,7 @@ object InMemoryJournal {
   }
 }
 
-final class InSnapshotStorage[STATE](storage: ConcurrentMap[String, Offseted[STATE]])
-    extends SnapshotStorage[Any, STATE] {
+final class InSnapshotStorage[STATE](storage: ConcurrentMap[String, Offseted[STATE]]) extends SnapshotStorage[STATE] {
   def store(id: String, state: Offseted[STATE]): IO[PersistError, Unit] =
     storage.put(id, state).unit
 
@@ -58,7 +59,7 @@ final class InSnapshotStorage[STATE](storage: ConcurrentMap[String, Offseted[STA
 }
 
 object InSnapshotStorage {
-  def live[STATE: Tag]: ZLayer[Any, Nothing, SnapshotStorage[Any, STATE]] = ZLayer.fromZIO {
+  def live[STATE: Tag]: ZLayer[Any, Nothing, SnapshotStorage[STATE]] = ZLayer.fromZIO {
     for {
       ref <- ConcurrentMap.make[String, Offseted[STATE]]()
     } yield new InSnapshotStorage(ref)
