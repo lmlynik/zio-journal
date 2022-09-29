@@ -52,19 +52,34 @@ object EventSourcedEntitySpec extends ZIOSpecDefault {
           r      <- entity.send(Command.Die).absorbWith(_ => new Throwable).either
         } yield assert(r)(isLeft(hasField("message", _.getMessage, equalTo("i'm dead"))))
       },
+      test("multiple persists within a transaction and success should maintain the events") {
+        for {
+          ref    <- Ref.make("")
+          entity <- MyPersistentBehavior("1", ref)
+          _      <- entity
+                      .send(Command.NextMessageDoubleAndFail("I'm good", FailureMode.Success))
+                      .either
+          e      <- getJournalAndSnapshot("1")
+          refVal <- ref.get
+        } yield assert(e.events)(hasSize(equalTo(2))) && assert(e.snapshot)(isSome) && assert(refVal)(
+          equalTo("I'm good")
+        )
+      },
       test("multiple persists within a transaction and die should invalidate the events") {
         for {
-          entity <- MyPersistentBehavior("1")
+          ref    <- Ref.make("")
+          entity <- MyPersistentBehavior("1", ref)
           r      <- entity
                       .send(Command.NextMessageDoubleAndFail("I'm virus", FailureMode.Die))
                       .absorbWith(_ => new Throwable)
                       .either
           state  <- entity.state
           e      <- getJournalAndSnapshot("1")
+          refVal <- ref.get
         } yield assert(r)(isLeft(hasField("message", _.getMessage, equalTo("i'm dead")))) && assert(state)(
           equalTo(State())
-        ) && assert(e.events)(isEmpty) && assert(e.snapshot)(isNone)
-      },
+        ) && assert(e.events)(isEmpty) && assert(e.snapshot)(isNone) && assert(refVal)(equalTo(""))
+      } @@ withLiveRandom @@ nonFlaky,
       test("multiple persists within a transaction and fail should invalidate the events") {
         for {
           entity <- MyPersistentBehavior("1")

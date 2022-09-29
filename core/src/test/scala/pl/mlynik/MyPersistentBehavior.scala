@@ -3,6 +3,9 @@ package pl.mlynik
 import zio._
 import pl.mlynik.journal.Journal
 import pl.mlynik.Effect.EffectIO
+import pl.mlynik.journal.EntityRef
+import pl.mlynik.journal.Storage.LoadError
+import pl.mlynik.journal.SnapshotStorage
 
 object MyPersistentBehavior {
 
@@ -35,7 +38,7 @@ object MyPersistentBehavior {
 
   final case class State(numbers: List[String] = Nil)
 
-  def commandHandler(state: State, cmd: Command)(using trace: Trace): EffectIO[Any, Error, Event] = {
+  def commandHandler(ref: Ref[String])(state: State, cmd: Command)(using trace: Trace): EffectIO[Any, Error, Event] = {
     import Effect.*
     cmd match
       case Command.NextMessage(value)                           =>
@@ -49,7 +52,7 @@ object MyPersistentBehavior {
       case Command.Die                                          =>
         ZIO.die(new Throwable("i'm dead"))
       case Command.NextMessageDoubleAndFail(value, failureMode) =>
-        val failTransaction: IO[Error, Effect[Event]] =
+        val maybeFail: IO[Error, Effect[Event]] =
           failureMode match
             case FailureMode.Success =>
               none
@@ -65,9 +68,10 @@ object MyPersistentBehavior {
               )
 
         persistZIO(Event.NextMessageAdded(value)) >>>
-          persistZIO(Event.NextMessageAdded(value)) >>>
           snapshotZIO >>>
-          failTransaction
+          runZIO(ref.set(value)) >>>
+          maybeFail >>>
+          persistZIO(Event.NextMessageAdded(value))
 
       case Command.Log =>
         ZIO.logSpan("handling of log command") {
@@ -87,11 +91,26 @@ object MyPersistentBehavior {
       case Event.Logged(spans)           =>
         ZIO.succeed(State(spans))
 
-  def apply(id: String) =
+  type EntityType = ZIO[SnapshotStorage[
+    State
+  ] & Journal[Event] & EntityManager[Any, Any, Command, Error, Event, State], LoadError, EntityRef[
+    Any,
+    Any,
+    Command,
+    Error,
+    Event,
+    State
+  ]]
+
+  def apply(id: String): EntityType                   =
+    Ref.make("").flatMap { ref =>
+      apply(id, ref)
+    }
+  def apply(id: String, ref: Ref[String]): EntityType =
     EventSourcedEntity[Any, Any, Command, Error, Event, State](
       persistenceId = id,
       emptyState = State(),
-      commandHandler = commandHandler,
+      commandHandler = commandHandler(ref),
       eventHandler = eventHandler
     )
 }

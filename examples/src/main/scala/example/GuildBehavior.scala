@@ -47,7 +47,7 @@ object GuildBehavior {
         if (state.state.size >= 5)
           replier.reply(Failure(new Exception("Guild is already full!"))) *> none
         else {
-          persistZIO(GuildEvent.Joined(userId)) >>> (replier.reply(Success(state.state + userId)) *> none)
+          persistZIO(GuildEvent.Joined(userId)) >>> runZIO(replier.reply(Success(state.state + userId)))
         }
       case GuildMessage.Leave(userId)         =>
         persistZIO(GuildEvent.Left(userId))

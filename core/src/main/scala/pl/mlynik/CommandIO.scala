@@ -7,8 +7,8 @@ enum Effect[+EVENT] {
   case None
   case Reply[E, A](result: IO[E, A]) extends Effect[Nothing]
   case Complex(effects: List[Effect[EVENT]])
+  case Run[R: Tag](zio: ZIO[R, Nothing, Unit]) extends Effect[Nothing]
 }
-
 import scala.annotation.targetName
 
 object Effect {
@@ -32,8 +32,10 @@ object Effect {
   def fail[EVENT, E, A](result: IO[E, A]): UIO[Effect[EVENT]] =
     ZIO.succeed(Reply(result))
 
+  def runZIO[R: Tag](z: ZIO[R, Nothing, Unit]): UIO[Run[R]] = ZIO.succeed(Run(z))
+
   extension [R, Err, EVENT](ef1: EffectIO[R, Err, EVENT]) {
     @targetName("andThen")
-    def >>>(ef2: EffectIO[R, Err, EVENT]) = complexZIO(ef1, ef2)
+    def >>>(ef2: EffectIO[R, Err, EVENT]): EffectIO[R, Err, EVENT] = complexZIO(ef1, ef2)
   }
 }
