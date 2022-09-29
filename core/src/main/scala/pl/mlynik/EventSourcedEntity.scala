@@ -59,7 +59,7 @@ object EventSourcedEntity {
                                snapshotStorage.store(persistenceId, Offseted(state.offset, state.entity)).as(state)
                              case Effect.Complex(effects) =>
                                ZIO.foldLeft(effects)(state) { case (state, effect) =>
-                                 handleEffect(state, resultPromise, effect)
+                                 ZIO.suspendSucceed(handleEffect(state, resultPromise, effect))
                                }
                              case Effect.Reply(value)     =>
                                // TODO providing wrong type causes a runtime error!
