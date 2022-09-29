@@ -52,11 +52,9 @@ object EventSourcedEntity {
         journal         <- ZIO.service[Journal[EVENT]]
         snapshotStorage <- ZIO.service[SnapshotStorage[STATE]]
         newState        <- effect match
-                             case Effect.Persist(event) =>
-                               journal.persist(persistenceId, state.offset, event) *> eventHandler(state.entity, event).map(
-                                 state.updateState
-                               )
-
+                             case Effect.Persist(event)   =>
+                               journal.persist(persistenceId, state.offset, event)
+                                 *> eventHandler(state.entity, event).map(state.updateState)
                              case Effect.Snapshot         =>
                                snapshotStorage.store(persistenceId, Offseted(state.offset, state.entity)).as(state)
                              case Effect.Complex(effects) =>
