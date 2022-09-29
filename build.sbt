@@ -18,23 +18,27 @@ lazy val `core` = (project in file("core"))
 
 lazy val `postgres-journal` = (project in file("postgres-journal"))
   .settings(
-    name := "postgres-journal"
-  )
-  .settings {
+    name := "postgres-journal",
     libraryDependencies ++= Seq(
       "org.postgresql"         % "postgresql"                        % "42.5.0",
       "io.getquill"           %% "quill-jdbc-zio"                    % "4.4.0",
       "org.flywaydb"           % "flyway-core"                       % "9.3.0",
       "io.github.scottweaver" %% "zio-2-0-testcontainers-postgresql" % "0.8.0"
     )
-  }
+  )
   .dependsOn(`core`)
   .settings(commonSettings)
 
 lazy val `examples` = (project in file("examples"))
   .settings(
-    name := "examples"
+    name := "examples",
+    libraryDependencies ++= Seq(
+      "com.devsisters" %% "shardcake-manager"       % "2.0.1",
+      "com.devsisters" %% "shardcake-protocol-grpc" % "2.0.1"
+    )
   )
+  .dependsOn(`core`)
+  .settings(commonSettings)
 
 lazy val commonSettings = Def.settings(
   resolvers ++= Resolver.sonatypeOssRepos("snapshots"),
