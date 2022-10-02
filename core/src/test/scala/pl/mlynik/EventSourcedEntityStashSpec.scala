@@ -21,7 +21,7 @@ object EventSourcedEntityStashSpec extends InMemoryEvenSourceEntitySpec {
           _        <- entity.send(Command.StartStashing)
           _        <- entity.send(Command.Stash("message")).repeatN(4)
           stateA   <- entity.state
-          response <- entity.ask[State](Command.Unstash).debug("RESPONSE")
+          _        <- entity.ask[State](Command.Unstash)
           stateB   <- entity.state
         } yield assert(stateA.messages)(equalTo(Nil))
           && assert(stateA.stashing)(isTrue)

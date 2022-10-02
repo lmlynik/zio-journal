@@ -95,7 +95,7 @@ object MyPersistentBehavior {
         persistZIO(Event.NextMessageAdded(value))
 
       case Command.Unstash =>
-        persistZIO(Event.StoppedStashing) >>> unstash >>> reply(ZIO.succeed(state))
+        persistZIO(Event.StoppedStashing) >>> unstash >>> reply(ZIO.succeed(state)) >>> snapshotZIO
   }
 
   def eventHandler(state: State, evt: Event): ZIO[Any, Nothing, State] =
@@ -135,3 +135,4 @@ object MyPersistentBehavior {
       eventHandler = eventHandler
     )
 }
+
