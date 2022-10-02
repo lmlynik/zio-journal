@@ -7,7 +7,7 @@ import zio.concurrent.ConcurrentMap
 import zio.stream.ZStream
 import zio.stream.ZPipeline
 
-final class InMemoryJournal[R, EVENT](
+final class InMemoryJournal[EVENT](
   storage: ConcurrentMap[String, List[Offseted[String]]],
   serde: Serde[EVENT, String]
 ) extends Journal[EVENT] {

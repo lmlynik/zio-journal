@@ -24,6 +24,10 @@ object MyPersistentBehavior {
     case Fail
     case Die
     case Log
+    case StartStashing
+    case Stash(value: String)
+    case Unstash
+
   }
 
   enum Error {
@@ -34,9 +38,11 @@ object MyPersistentBehavior {
     case NextMessageAdded(value: String)
     case Cleared
     case Logged(spans: List[String])
+    case StartedStashing
+    case StoppedStashing
   }
 
-  final case class State(numbers: List[String] = Nil)
+  final case class State(messages: List[String] = Nil, stashing: Boolean = false)
 
   def commandHandler(ref: Ref[String])(state: State, cmd: Command)(using trace: Trace): EffectIO[Any, Error, Event] = {
     import Effect.*
@@ -46,7 +52,7 @@ object MyPersistentBehavior {
       case Command.Clear                                        =>
         persistZIO(Event.Cleared) >>> snapshotZIO
       case Command.Get                                          =>
-        reply(ZIO.succeed(state.numbers))
+        reply(ZIO.succeed(state.messages))
       case Command.Fail                                         =>
         reply(ZIO.fail(Error.FailResponse))
       case Command.Die                                          =>
@@ -73,23 +79,38 @@ object MyPersistentBehavior {
           maybeFail >>>
           persistZIO(Event.NextMessageAdded(value))
 
-      case Command.Log =>
+      case Command.Log           =>
         ZIO.logSpan("handling of log command") {
           FiberRef.currentLogSpan.get.flatMap { spans =>
             ZIO.log("Log Command").delay(10.millis) *> persistZIO(Event.Logged(spans.map(_.label)))
           }
         }
+      case Command.StartStashing =>
+        persistZIO(Event.StartedStashing)
+
+      case Command.Stash(_) if state.stashing =>
+        stashZIO
+
+      case Command.Stash(value) =>
+        persistZIO(Event.NextMessageAdded(value))
+
+      case Command.Unstash =>
+        persistZIO(Event.StoppedStashing) >>> unstash >>> reply(ZIO.succeed(state))
   }
 
   def eventHandler(state: State, evt: Event): ZIO[Any, Nothing, State] =
     evt match
       case Event.NextMessageAdded(value) =>
         ZIO
-          .succeed(state.copy(numbers = state.numbers :+ value))
+          .succeed(state.copy(messages = state.messages :+ value))
       case Event.Cleared                 =>
         ZIO.succeed(State())
       case Event.Logged(spans)           =>
         ZIO.succeed(State(spans))
+      case Event.StartedStashing         =>
+        ZIO.succeed(state.copy(stashing = true))
+      case Event.StoppedStashing         =>
+        ZIO.succeed(state.copy(stashing = false))
 
   type EntityType = ZIO[SnapshotStorage[
     State

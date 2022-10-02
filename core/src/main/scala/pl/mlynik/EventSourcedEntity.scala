@@ -45,7 +45,9 @@ object EventSourcedEntity {
 
     def handleEffect[A](
       state: State,
+      command: COMMAND,
       resultPromise: Promise[CERR, A],
+      stash: Queue[COMMAND],
       effect: Effect[EVENT]
     )(implicit trace: Trace): ZIO[CENV & Journal[EVENT] & SnapshotStorage[STATE], Storage.PersistError | CERR, State] =
       for {
@@ -59,25 +61,43 @@ object EventSourcedEntity {
                                snapshotStorage.store(persistenceId, Offseted(state.offset, state.entity)).as(state)
                              case Effect.Complex(effects) =>
                                ZIO.foldLeft(effects)(state) { case (state, effect) =>
-                                 ZIO.suspendSucceed(handleEffect(state, resultPromise, effect))
+                                 ZIO.logDebug(s"Effect $effect") *>
+                                   ZIO.suspendSucceed(handleEffect(state, command, resultPromise, stash, effect))
                                }
-                             case Effect.Reply(value)     =>
+
+                             case Effect.Reply(value) =>
                                // TODO providing wrong type causes a runtime error!
                                resultPromise.completeWith(value.mapBoth(_.asInstanceOf[CERR], _.asInstanceOf[A])).as(state)
-                             case Effect.Run[CENV](z)     =>
+
+                             case Effect.Run[CENV](z) =>
                                ZIO.suspendSucceed(z).as(state)
+
+                             case Effect.Stash =>
+                               stash.offer(command).as(state)
+
+                             case Effect.Unstash =>
+                               stash.takeAll.flatMap { commands =>
+                                 ZIO.foldLeft(commands)(state) { case (state, command) =>
+                                   ZIO.logDebug(s"Unstashing command $command") *>
+                                     handleCmd(state, command, resultPromise, stash)
+                                 }
+                               }
 
                              case Effect.None =>
                                ZIO.succeed(state)
       } yield newState
 
+    def handleCmd[A](st: State, cmd: COMMAND, resultPromise: Promise[CERR, A], stash: Queue[COMMAND]) =
+      commandHandler(st.entity, cmd).flatMap(eff => handleEffect(st, cmd, resultPromise, stash, eff))
+
     def handleCommand[A](
       cmd: COMMAND,
       currentState: Ref.Synchronized[State],
-      resultPromise: Promise[CERR, A]
+      resultPromise: Promise[CERR, A],
+      stash: Queue[COMMAND]
     )(implicit trace: Trace): ZIO[CENV & Journal[EVENT] & SnapshotStorage[STATE], Storage.PersistError | CERR, State] =
       currentState.updateAndGetZIO { st =>
-        commandHandler(st.entity, cmd).flatMap(eff => handleEffect(st, resultPromise, eff))
+        handleCmd(st, cmd, resultPromise, stash)
       } <* resultPromise.isDone.flatMap(done => ZIO.unless(done)(resultPromise.succeed(().asInstanceOf[A])))
 
     def entity: ZIO[CENV & Journal[EVENT] & SnapshotStorage[STATE], Storage.LoadError, EntityRef[
@@ -91,6 +111,7 @@ object EventSourcedEntity {
       for {
         currentState <- Ref.Synchronized.make(State(0, emptyState))
         _            <- journalPlayback(currentState)
+        stash        <- Queue.unbounded[COMMAND]
         _            <- ZIO.logInfo(s"Loaded $persistenceId")
 
       } yield new EntityRef[R, CENV, COMMAND, CERR, EVENT, STATE] {
@@ -103,7 +124,7 @@ object EventSourcedEntity {
         ): ZIO[CENV & Journal[EVENT] & SnapshotStorage[STATE], Storage.PersistError | CERR, Unit] =
           for {
             promise <- Promise.make[CERR, Unit]
-            _       <- handleCommand(command, currentState, promise)
+            _       <- handleCommand(command, currentState, promise, stash)
             result  <- promise.await
           } yield result
 
@@ -112,7 +133,7 @@ object EventSourcedEntity {
         )(implicit trace: Trace): ZIO[CENV & Journal[EVENT] & SnapshotStorage[STATE], Storage.PersistError | CERR, A] =
           for {
             promise <- Promise.make[CERR, A]
-            _       <- handleCommand(command, currentState, promise)
+            _       <- handleCommand(command, currentState, promise, stash)
             result  <- promise.await
           } yield result
       }

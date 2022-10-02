@@ -8,12 +8,16 @@ enum Effect[+EVENT] {
   case Reply[E, A](result: IO[E, A]) extends Effect[Nothing]
   case Complex(effects: List[Effect[EVENT]])
   case Run[R: Tag](zio: ZIO[R, Nothing, Unit]) extends Effect[Nothing]
+
+  case Stash
+  case Unstash
 }
 import scala.annotation.targetName
 
 object Effect {
 
   type EffectIO[R, Err, EVENT] = ZIO[R, Err, Effect[EVENT]]
+
   def persistZIO[EVENT](event: EVENT): UIO[Effect[EVENT]] = ZIO.succeed(Persist(event))
 
   def snapshotZIO[EVENT]: UIO[Effect[EVENT]] = ZIO.succeed(Snapshot)
@@ -33,6 +37,10 @@ object Effect {
     ZIO.succeed(Reply(result))
 
   def runZIO[R: Tag](z: ZIO[R, Nothing, Unit]): UIO[Run[R]] = ZIO.succeed(Run(z))
+
+  def stashZIO[EVENT]: UIO[Effect[EVENT]] = ZIO.succeed(Stash)
+
+  def unstash[EVENT]: UIO[Effect[EVENT]] = ZIO.succeed(Unstash)
 
   extension [R, Err, EVENT](ef1: EffectIO[R, Err, EVENT]) {
     @targetName("andThen")
