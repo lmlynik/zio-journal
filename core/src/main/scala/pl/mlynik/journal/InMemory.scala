@@ -6,6 +6,7 @@ import zio.*
 import zio.concurrent.ConcurrentMap
 import zio.stream.ZStream
 import zio.stream.ZPipeline
+import pl.mlynik.journal.Storage.LoadError
 
 final class InMemoryJournal[EVENT](
   storage: ConcurrentMap[String, List[Offseted[String]]],
@@ -33,7 +34,7 @@ final class InMemoryJournal[EVENT](
     }
   }
 
-  def load(id: String, loadFrom: Long): ZStream[Any, Storage.LoadError, Offseted[EVENT]] =
+  def load(id: String, loadFrom: Long, loadMode: Storage.LoadMode): ZStream[Any, Storage.LoadError, Offseted[EVENT]] =
     ZStream.unwrap {
       storage
         .get(id)
@@ -63,5 +64,27 @@ object InSnapshotStorage {
     for {
       ref <- ConcurrentMap.make[String, Offseted[STATE]]()
     } yield new InSnapshotStorage(ref)
+  }
+}
+
+final class InMemoryProjectionOffsetStorage(storage: ConcurrentMap[String, Offseted[Unit]])
+    extends ProjectionOffsetStorage {
+
+  override def store(
+    persistenceId: String,
+    projectionId: String,
+    offset: Offseted[Unit]
+  ): ZIO[Any, PersistError, Unit] =
+    storage.put(s"$persistenceId-$projectionId", offset).unit
+
+  override def loadLast(persistenceId: String, projectionId: String): ZIO[Any, LoadError, Option[Offseted[Unit]]] =
+    storage.get(s"$persistenceId-$projectionId")
+}
+
+object InMemoryProjectionOffsetStorage {
+  val live: ZLayer[Any, Nothing, ProjectionOffsetStorage] = ZLayer.fromZIO {
+    for {
+      ref <- ConcurrentMap.make[String, Offseted[Unit]]()
+    } yield new InMemoryProjectionOffsetStorage(ref)
   }
 }

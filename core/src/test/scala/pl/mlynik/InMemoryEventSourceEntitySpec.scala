@@ -13,7 +13,7 @@ import pl.mlynik.journal.serde.Serde
 import MyPersistentBehavior.*
 import pl.mlynik.types.ENV
 
-abstract class InMemoryEvenSourceEntitySpec extends ZIOSpec[ENV[Command, Error, Event, State]] {
+abstract class InMemoryEventSourceEntitySpec extends ZIOSpec[ENV[Command, Error, Event, State]] {
   import MyPersistentBehavior.*
 
   val storageLayers: ZLayer[Any, Nothing, Serde[Event, String] & Journal[Event] & SnapshotStorage[State]] =

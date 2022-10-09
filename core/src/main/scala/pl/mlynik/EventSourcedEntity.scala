@@ -29,7 +29,7 @@ object EventSourcedEntity {
       def updateState(offset: Long, entity: STATE): State = this.copy(offset = offset, entity = entity)
     }
 
-    inline def journalPlayback(
+    def journalPlayback(
       currentState: Ref.Synchronized[State]
     )(implicit trace: Trace) =
       currentState.updateAndGetZIO { st =>

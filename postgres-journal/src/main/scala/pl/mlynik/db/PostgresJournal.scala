@@ -13,6 +13,7 @@ import java.sql.SQLException
 import java.time.Instant
 import javax.sql.DataSource
 import javax.xml.crypto.Data
+import pl.mlynik.journal.Storage.LoadMode
 
 final class PostgresJournal[EVENT](
   serde: Serde[EVENT, Array[Byte]],
@@ -41,12 +42,24 @@ final class PostgresJournal[EVENT](
     }
   }
 
-  override def load(id: String, loadFrom: Long): ZStream[Any, Storage.LoadError, Offseted[EVENT]] = {
-    val load: StreamResult[JournalRow] = stream(
-      query[JournalRow]
-        .filter(row => row.persistenceId == lift(id) && row.sequenceNumber >= lift(loadFrom))
-        .sortBy(_.sequenceNumber)(Ord.asc)
-    )
+  override def load(
+    id: String,
+    loadFrom: Long,
+    loadMode: Storage.LoadMode
+  ): ZStream[Any, Storage.LoadError, Offseted[EVENT]] = {
+    inline def query2                  = query[JournalRow]
+      .filter(row => row.persistenceId == lift(id) && row.sequenceNumber >= lift(loadFrom))
+      .sortBy(_.sequenceNumber)(Ord.asc)
+    def load: StreamResult[JournalRow] = loadMode match
+      case LoadMode.NoBatch          =>
+        stream(
+          query2
+        )
+      case LoadMode.Batch(batchSize) =>
+        stream(
+          query2,
+          batchSize
+        )
 
     load.mapError(sqlError => SqlError(sqlError)).via(deserialize)
   }.provideEnvironment(dataSource)

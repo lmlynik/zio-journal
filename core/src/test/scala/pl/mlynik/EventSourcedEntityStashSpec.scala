@@ -10,19 +10,19 @@ import pl.mlynik.journal.Storage.Offseted
 import pl.mlynik.journal.serde.ZIOJSONSerde
 import pl.mlynik.journal.Storage.LoadError
 
-object EventSourcedEntityStashSpec extends InMemoryEvenSourceEntitySpec {
+object EventSourcedEntityStashSpec extends InMemoryEventSourceEntitySpec {
   import MyPersistentBehavior.*
 
   def spec =
     suite("EventSourcedEntityStashSpec")(
       test("Accepts commands which update states") {
         for {
-          entity   <- MyPersistentBehavior("1")
-          _        <- entity.send(Command.StartStashing)
-          _        <- entity.send(Command.Stash("message")).repeatN(4)
-          stateA   <- entity.state
-          _        <- entity.ask[State](Command.Unstash)
-          stateB   <- entity.state
+          entity <- MyPersistentBehavior("1")
+          _      <- entity.send(Command.StartStashing)
+          _      <- entity.send(Command.Stash("message")).repeatN(4)
+          stateA <- entity.state
+          _      <- entity.ask[State](Command.Unstash)
+          stateB <- entity.state
         } yield assert(stateA.messages)(equalTo(Nil))
           && assert(stateA.stashing)(isTrue)
           && assert(stateB.messages.head)(equalTo("message"))

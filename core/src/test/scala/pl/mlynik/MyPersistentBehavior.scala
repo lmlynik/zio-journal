@@ -123,10 +123,11 @@ object MyPersistentBehavior {
     State
   ]]
 
-  def apply(id: String): EntityType                   =
+  def apply(id: String): EntityType =
     Ref.make("").flatMap { ref =>
       apply(id, ref)
     }
+
   def apply(id: String, ref: Ref[String]): EntityType =
     EventSourcedEntity[Any, Any, Command, Error, Event, State](
       persistenceId = id,
@@ -135,4 +136,3 @@ object MyPersistentBehavior {
       eventHandler = eventHandler
     )
 }
-

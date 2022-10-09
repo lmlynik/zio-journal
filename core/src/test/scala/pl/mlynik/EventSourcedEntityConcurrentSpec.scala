@@ -10,7 +10,7 @@ import pl.mlynik.journal.Storage.Offseted
 import pl.mlynik.journal.serde.ZIOJSONSerde
 import pl.mlynik.journal.Storage.LoadError
 
-object EventSourcedEntityConcurrentSpec extends InMemoryEvenSourceEntitySpec {
+object EventSourcedEntityConcurrentSpec extends InMemoryEventSourceEntitySpec {
   import MyPersistentBehavior.*
 
   def spec =
